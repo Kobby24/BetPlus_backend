@@ -1,0 +1,129 @@
+@import "tailwindcss";
+
+:root {
+  /* Sea blue — primary brand */
+  --brand: #1a5568;
+  --brand-dark: #0f4658;
+  --brand-light: #e8f4f8;
+  --brand-soft: #c5dce6;
+  --brand-accent: #75c2d9;
+
+  /* Surfaces */
+  --background: #e8f4f8;
+  --foreground: #1e3a47;
+  --surface: #ffffff;
+  --surface-elevated: #f3f9fc;
+  --border: #c5dce6;
+  --muted: #6b8a99;
+
+  /* Green — wins, odds, primary actions */
+  --accent: #0d9737;
+  --accent-dark: #0a7a2e;
+  --accent-soft: #e8f5eb;
+
+  /* Red — lost, live, errors, destructive */
+  --danger: #e41827;
+  --danger-dark: #c4111f;
+  --live: #e41827;
+
+  /* Ticket aliases (same palette) */
+  --ticket-sea: var(--brand);
+  --ticket-sea-dark: var(--brand-dark);
+  --ticket-sea-light: var(--brand-light);
+  --ticket-sea-soft: var(--brand-soft);
+  --ticket-sea-accent: var(--brand-accent);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-border: var(--border);
+  --color-muted: var(--muted);
+  --color-brand: var(--brand);
+  --color-brand-dark: var(--brand-dark);
+  --color-brand-light: var(--brand-light);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-accent: var(--brand-accent);
+  --color-accent: var(--accent);
+  --color-accent-dark: var(--accent-dark);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-dark: var(--danger-dark);
+  --color-live: var(--live);
+  --color-ticket-sea: var(--ticket-sea);
+  --color-ticket-sea-dark: var(--ticket-sea-dark);
+  --color-ticket-sea-light: var(--ticket-sea-light);
+  --color-ticket-sea-soft: var(--ticket-sea-soft);
+  --color-ticket-sea-accent: var(--ticket-sea-accent);
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.card {
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(26 85 104 / 0.04);
+}
+
+.card-hover:hover {
+  background: var(--surface-elevated);
+}
+
+.league-block {
+  overflow: hidden;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(26 85 104 / 0.04);
+}
+
+.page-title {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.section-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  #betslip,
+  #betslip * {
+    visibility: visible;
+  }
+
+  #betslip {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-height: none;
+    border: none;
+    box-shadow: none;
+  }
+}

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <defs>
+    <radialGradient id="hk-shade" cx="40%" cy="35%" r="60%">
+      <stop offset="0%" stop-color="#4a4a4a"/>
+      <stop offset="55%" stop-color="#1a1a1a"/>
+      <stop offset="100%" stop-color="#0a0a0a"/>
+    </radialGradient>
+  </defs>
+  <ellipse cx="24" cy="28" rx="16" ry="7.5" fill="url(#hk-shade)" stroke="#2a2a2a" stroke-width="0.75"/>
+  <ellipse cx="24" cy="26" rx="16" ry="5.5" fill="#2f2f2f"/>
+  <ellipse cx="18" cy="24.5" rx="5" ry="2" fill="#6a6a6a" opacity="0.35"/>
+  <path d="M10 28h28" stroke="#111" stroke-width="0.8" opacity="0.5"/>
+  <path d="M30 14l10 8" stroke="#8b4513" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M30 14l10 8" stroke="#c68642" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M28 16c2 1.5 4 3 6 4.5" stroke="#111" stroke-width="2.4" stroke-linecap="round"/>
+</svg>
