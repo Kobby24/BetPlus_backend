@@ -1,42 +1,67 @@
-# BetPlus Frontend
+# BetPlus Backend (FastAPI)
 
-## Development
+## Quick start
 
 ```bash
-cp .env.example .env.local
-npm install
-npm run dev
+cd backend
+cp .env.example .env
+docker compose up --build
 ```
 
-Open http://localhost:3000
+API: `http://localhost:8000`  
+Health: `GET /health/`  
+Readiness: `GET /health/ready`  
+OpenAPI docs: `http://localhost:8000/docs`
 
-## Backend mode (recommended)
+Production deploy: see [`DEPLOY.md`](../DEPLOY.md).
 
-Set in `.env.local`:
+## Environment
 
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | PostgreSQL (required in production) or SQLite for local/dev |
+| `SECRET_KEY` | JWT signing secret (required in production) |
+| `CORS_ORIGINS` | Comma-separated frontend origins; `*` is rejected in production |
+| `ENVIRONMENT` | `development` / `staging` / `production` / `test` |
+| `SEED_DEMO_DATA` | Seed catalog sports/matches (disabled in production unless `ALLOW_DEMO_SEED`) |
+| `SEED_DEMO_USERS` | Seed `admin@betplus.com` / `admin123` — **never in production** |
+| `PAYMENTS_MODE` | `simulated` / `paystack` / `disabled` |
+| `RATE_LIMIT_ENABLED` | DB-backed limits for login, register, bets, webhooks |
+
+## Migrations
+
+```bash
+cd backend
+alembic upgrade head
 ```
+
+Production must use Alembic. `Base.metadata.create_all()` is skipped when `ENVIRONMENT=production`.
+
+## Tests
+
+```bash
+cd backend
+py -m pytest tests/ -v
+```
+
+PostgreSQL concurrency tests run only when `POSTGRES_TEST_URL` is set.
+
+## Demo users (SEED_DEMO_USERS=true, never production)
+
+| Email | Password | Role |
+|-------|----------|------|
+| admin@betplus.com | admin123 | admin |
+| demo@betplus.local | demo123 | admin |
+| manager@betplus.local | manager123 | manager |
+
+## API versioning
+
+- Primary: `/api/v1/...`
+- Legacy aliases: `/api/auth`, `/api/wallet`, `/api/bets`, `/api/catalog`
+
+## Frontend integration
+
+```env
 NEXT_PUBLIC_USE_BACKEND=true
 BACKEND_URL=http://localhost:8000
 ```
-
-Start FastAPI first (`backend/README.md`), then Next.js.
-
-In backend mode, authentication, wallet, bets, settlement, admin, manager, referrals, and the platform ledger are served by FastAPI. The JWT is stored in the browser only as a session token.
-
-## Admin portal
-
-```bash
-npm run dev:admin
-```
-
-Uses `ADMIN_ONLY=true`. Sign in with a FastAPI admin user (`admin@betplus.com` / `admin123` when demo seed is enabled) or the `ADMIN_EMAIL` / `ADMIN_PASSWORD` env fallback.
-
-## Scripts
-
-| Script | Description |
-|--------|-------------|
-| `npm run dev` | Public betting app |
-| `npm run dev:admin` | Admin-only portal |
-| `npm run lint` | ESLint |
-| `npm run build` | Production build |
-| `npm start` | Serve production build |
