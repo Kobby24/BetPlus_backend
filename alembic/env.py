@@ -1,4 +1,3 @@
-import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -24,14 +23,20 @@ from app.models import (  # noqa: F401
 
 config = context.config
 
+# alembic.ini declares SQLAlchemy/Alembic loggers; keep app loggers intact.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    return get_settings().database_url
+    """Use the same normalized DATABASE_URL as the FastAPI application."""
+    settings = get_settings()
+    url = settings.sqlalchemy_database_url
+    if settings.is_production and url.startswith("sqlite"):
+        raise RuntimeError("SQLite is not allowed in production; set DATABASE_URL")
+    return url
 
 
 def run_migrations_offline() -> None:
