@@ -26,8 +26,12 @@ def upgrade() -> None:
     op.create_index("ix_audit_logs_created_at", "audit_logs", ["created_at"], unique=False)
     op.create_index("ix_platform_ledger_created_at", "platform_ledger", ["created_at"], unique=False)
 
-    op.create_check_constraint("ck_users_balance_nonneg", "users", "balance >= 0")
-    op.create_check_constraint("ck_bets_stake_positive", "bets", "stake > 0")
+    # SQLite cannot ALTER TABLE ADD CONSTRAINT. Batch recreate also breaks the
+    # surrounding SQLite migration transaction, so skip CHECKs on SQLite only.
+    # PostgreSQL still gets the production constraints.
+    if op.get_bind().dialect.name != "sqlite":
+        op.create_check_constraint("ck_users_balance_nonneg", "users", "balance >= 0")
+        op.create_check_constraint("ck_bets_stake_positive", "bets", "stake > 0")
 
     op.create_table(
         "payment_intents",
@@ -85,8 +89,9 @@ def downgrade() -> None:
     op.drop_table("rate_limit_hits")
     op.drop_table("idempotency_keys")
     op.drop_table("payment_intents")
-    op.drop_constraint("ck_bets_stake_positive", "bets", type_="check")
-    op.drop_constraint("ck_users_balance_nonneg", "users", type_="check")
+    if op.get_bind().dialect.name != "sqlite":
+        op.drop_constraint("ck_bets_stake_positive", "bets", type_="check")
+        op.drop_constraint("ck_users_balance_nonneg", "users", type_="check")
     op.drop_index("ix_platform_ledger_created_at", table_name="platform_ledger")
     op.drop_index("ix_audit_logs_created_at", table_name="audit_logs")
     op.drop_index("ix_transactions_created_at", table_name="transactions")

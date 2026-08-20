@@ -54,6 +54,31 @@ def test_alembic_env_reads_database_url_from_environment():
     assert "disable_existing_loggers=False" in source
 
 
+def test_alembic_upgrade_head_on_sqlite(tmp_path, monkeypatch):
+    from alembic import command
+    from sqlalchemy import create_engine, inspect, text
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///alembic_sqlite.db")
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.delenv("DYNO", raising=False)
+
+    cfg = Config(str(ALEMBIC_INI))
+    cfg.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
+    command.upgrade(cfg, "head")
+
+    engine = create_engine("sqlite:///alembic_sqlite.db")
+    tables = set(inspect(engine).get_table_names())
+    assert "games" in tables
+    assert "payment_intents" in tables
+    assert "idempotency_keys" in tables
+    assert "rate_limit_hits" in tables
+    with engine.connect() as conn:
+        version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    engine.dispose()
+    assert version == "003_production_hardening"
+
+
 def test_alembic_has_single_expected_head():
     cfg = Config(str(ALEMBIC_INI))
     cfg.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
