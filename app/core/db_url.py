@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
+import os
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
-def normalize_database_url(url: str, *, environment: str = "development") -> str:
+def running_on_heroku() -> bool:
+    """Heroku sets ``DYNO`` for web, worker, and release processes."""
+    return bool(os.environ.get("DYNO"))
+
+
+def hosted_postgres_required(*, environment: str) -> bool:
+    return environment in {"production", "staging"} or running_on_heroku()
+
+
+def normalize_database_url(
+    url: str,
+    *,
+    environment: str = "development",
+    require_ssl: bool | None = None,
+) -> str:
     """Return a SQLAlchemy-compatible PostgreSQL/SQLite URL.
 
     Handles:
@@ -23,10 +38,21 @@ def normalize_database_url(url: str, *, environment: str = "development") -> str
     if url.startswith("postgresql://") and not url.startswith("postgresql+"):
         url = "postgresql+psycopg2://" + url[len("postgresql://") :]
 
-    if url.startswith("postgresql+") and environment == "production":
+    if require_ssl is None:
+        require_ssl = hosted_postgres_required(environment=environment)
+    if url.startswith("postgresql+") and require_ssl:
         url = _ensure_sslmode(url)
 
     return url
+
+
+def reject_sqlite_if_hosted(url: str, *, environment: str) -> None:
+    if hosted_postgres_required(environment=environment) and url.startswith("sqlite"):
+        raise RuntimeError(
+            "SQLite is not allowed on Heroku/production. "
+            "Set DATABASE_URL to the Supabase PostgreSQL URI "
+            "(heroku config:set DATABASE_URL=postgresql://...)."
+        )
 
 
 def _ensure_sslmode(url: str) -> str:

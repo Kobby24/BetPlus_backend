@@ -34,7 +34,7 @@ def init_db() -> None:
 
     Production schema must be created with ``alembic upgrade head``.
     """
-    if get_settings().is_production:
+    if get_settings().requires_postgres:
         return
     Base.metadata.create_all(bind=engine)
 

@@ -1,9 +1,15 @@
 from functools import lru_cache
+import os
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.core.db_url import normalize_database_url
+from app.core.db_url import (
+    hosted_postgres_required,
+    normalize_database_url,
+    reject_sqlite_if_hosted,
+    running_on_heroku,
+)
 
 
 class Settings(BaseSettings):
@@ -13,6 +19,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     database_url: str = Field(
@@ -72,8 +79,17 @@ class Settings(BaseSettings):
         return self.environment == "test"
 
     @property
+    def requires_postgres(self) -> bool:
+        return hosted_postgres_required(environment=self.environment)
+
+    @property
     def sqlalchemy_database_url(self) -> str:
-        return normalize_database_url(self.database_url, environment=self.environment)
+        raw = (os.environ.get("DATABASE_URL") or "").strip() or self.database_url
+        return normalize_database_url(
+            raw,
+            environment=self.environment,
+            require_ssl=self.requires_postgres,
+        )
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -87,7 +103,7 @@ class Settings(BaseSettings):
     def should_seed_demo(self) -> bool:
         if self.is_test:
             return False
-        if self.is_production and not self.allow_demo_seed:
+        if self.requires_postgres and not self.allow_demo_seed:
             return False
         return self.seed_demo_data
 
@@ -95,7 +111,7 @@ class Settings(BaseSettings):
     def should_seed_demo_users(self) -> bool:
         if not self.should_seed_demo:
             return False
-        if self.is_production:
+        if self.requires_postgres:
             return False
         return self.seed_demo_users
 
@@ -114,14 +130,17 @@ class Settings(BaseSettings):
         return self.rate_limit_enabled
 
     def validate_for_runtime(self) -> None:
-        if not self.is_production:
+        reject_sqlite_if_hosted(
+            self.sqlalchemy_database_url, environment=self.environment
+        )
+        if not self.is_production and not running_on_heroku():
             return
         if self.secret_key.startswith("dev-insecure"):
             raise RuntimeError("SECRET_KEY must be set to a strong secret in production")
         if "*" in self.cors_origin_list:
             raise RuntimeError("CORS_ORIGINS must not include * in production")
-        if self.sqlalchemy_database_url.startswith("sqlite"):
-            raise RuntimeError("SQLite is not allowed in production; set DATABASE_URL")
+        if not self.is_production:
+            return
         if self.payments_mode == "simulated" and not self.allow_simulated_payments:
             raise RuntimeError(
                 "PAYMENTS_MODE=simulated is not allowed in production unless "

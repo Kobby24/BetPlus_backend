@@ -46,11 +46,11 @@ def test_alembic_fileconfig_does_not_raise():
     fileConfig(str(ALEMBIC_INI), disable_existing_loggers=False)
 
 
-def test_alembic_env_uses_app_database_url_and_guarded_logging():
+def test_alembic_env_reads_database_url_from_environment():
     source = (BACKEND_ROOT / "alembic" / "env.py").read_text(encoding="utf-8")
-    assert "sqlalchemy_database_url" in source
+    assert 'os.environ.get("DATABASE_URL")' in source
+    assert "reject_sqlite_if_hosted" in source
     assert "disable_existing_loggers=False" in source
-    assert "get_settings().database_url" not in source
 
 
 def test_alembic_has_single_expected_head():
