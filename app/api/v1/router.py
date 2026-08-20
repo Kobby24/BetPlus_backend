@@ -1,8 +1,9 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.api.deps import require_migrated_schema
 from app.api.v1 import admin, auth, bets, catalog, manager, payments, wallet
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_migrated_schema)])
 router.include_router(auth.router, prefix="/auth", tags=["auth"])
 router.include_router(wallet.router, prefix="/wallet", tags=["wallet"])
 router.include_router(payments.router, prefix="/payments", tags=["payments"])
