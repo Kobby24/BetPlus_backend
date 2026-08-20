@@ -9,7 +9,8 @@ from app.api.health import router as health_router
 from app.api.v1.router import router as v1_router
 from app.core.config import get_settings
 from app.core.logging import init_logging
-from app.db.session import init_db
+from app.db.schema_status import missing_required_tables
+from app.db.session import engine, init_db
 from app.seed import seed_demo_data
 
 logger = logging.getLogger("app.middleware")
@@ -21,6 +22,12 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     settings.validate_for_runtime()
     init_db()
+    missing = missing_required_tables(engine)
+    if missing:
+        logger.error(
+            "Database schema is not migrated (missing %s). Run: alembic upgrade head",
+            ", ".join(missing),
+        )
     if settings.should_seed_demo:
         seed_demo_data()
     yield
