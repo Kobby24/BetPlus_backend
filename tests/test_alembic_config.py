@@ -50,6 +50,7 @@ def test_alembic_env_reads_database_url_from_environment():
     source = (BACKEND_ROOT / "alembic" / "env.py").read_text(encoding="utf-8")
     assert 'os.environ.get("DATABASE_URL")' in source
     assert "reject_sqlite_if_hosted" in source
+    assert "prepare_database" in source
     assert "disable_existing_loggers=False" in source
 
 

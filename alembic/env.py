@@ -1,9 +1,12 @@
+import os
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app.core.config import get_settings
+from app.core.db_url import normalize_database_url, reject_sqlite_if_hosted
+from app.db.alembic_preflight import prepare_database
 from app.db.base import Base
 from app.models import (  # noqa: F401
     AuditLog,
@@ -31,11 +34,15 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    """Use the same normalized DATABASE_URL as the FastAPI application."""
+    """Use the same DATABASE_URL as FastAPI; never fall back to SQLite on Heroku."""
     settings = get_settings()
-    url = settings.sqlalchemy_database_url
-    if settings.is_production and url.startswith("sqlite"):
-        raise RuntimeError("SQLite is not allowed in production; set DATABASE_URL")
+    raw = (os.environ.get("DATABASE_URL") or "").strip() or settings.database_url
+    url = normalize_database_url(
+        raw,
+        environment=settings.environment,
+        require_ssl=settings.requires_postgres,
+    )
+    reject_sqlite_if_hosted(url, environment=settings.environment)
     return url
 
 
@@ -62,6 +69,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        prepare_database(connection)
         context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
