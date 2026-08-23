@@ -64,7 +64,6 @@ class SportyBetSyncSkip(BaseModel):
 class SportyBetSyncOut(BaseModel):
     success: bool
     source: str
-    type: str = "important_events"
     fetched: int
     created: int
     updated: int
@@ -73,6 +72,20 @@ class SportyBetSyncOut(BaseModel):
     skipped_protected: int = 0
     failed: int
     unsupported_markets: int = 0
+    skipped: list[SportyBetSyncSkip] = Field(default_factory=list)
+
+
+class SportyBetLiveSyncOut(BaseModel):
+    success: bool
+    source: str
+    type: str
+    fetched: int
+    created: int
+    updated: int
+    unchanged: int
+    skipped_invalid: int
+    skipped_protected: int = 0
+    failed: int
     live_updated: int = 0
     ended_updated: int = 0
     skipped: list[SportyBetSyncSkip] = Field(default_factory=list)

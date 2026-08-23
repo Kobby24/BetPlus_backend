@@ -65,6 +65,18 @@ class Settings(BaseSettings):
         default="https://www.sportybet.com/api/gh/factsCenter/liveOrPrematchEvents",
         validation_alias="SPORTYBET_LIVE_URL",
     )
+    sportybet_live_sport_id: str = Field(
+        default="sr:sport:1",
+        validation_alias="SPORTYBET_LIVE_SPORT_ID",
+    )
+    sportybet_live_timeout_seconds: float = Field(
+        default=15.0,
+        validation_alias="SPORTYBET_LIVE_TIMEOUT_SECONDS",
+    )
+    sportybet_live_retry_attempts: int = Field(
+        default=2,
+        validation_alias="SPORTYBET_LIVE_RETRY_ATTEMPTS",
+    )
     sportybet_sport_id: str = Field(
         default="sr:sport:1",
         validation_alias="SPORTYBET_SPORT_ID",
@@ -111,12 +123,12 @@ class Settings(BaseSettings):
             raise ValueError("PAYMENTS_MODE must be simulated, paystack, or disabled")
         return mode
 
-    @field_validator("sportybet_timeout_seconds")
+    @field_validator("sportybet_timeout_seconds", "sportybet_live_timeout_seconds")
     @classmethod
     def clamp_sportybet_timeout(cls, value: float) -> float:
         return min(max(float(value), 1.0), 60.0)
 
-    @field_validator("sportybet_retry_attempts")
+    @field_validator("sportybet_retry_attempts", "sportybet_live_retry_attempts")
     @classmethod
     def clamp_sportybet_retries(cls, value: int) -> int:
         return min(max(int(value), 1), 3)

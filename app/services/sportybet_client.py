@@ -23,7 +23,6 @@ logger = logging.getLogger("app.services.sportybet")
 TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 DEFAULT_FACTS_URL = "https://www.sportybet.com/api/gh/factsCenter/importantEvents"
-DEFAULT_LIVE_URL = "https://www.sportybet.com/api/gh/factsCenter/liveOrPrematchEvents"
 DEFAULT_SPORT_ID = "sr:sport:1"
 DEFAULT_TIMEOUT_SECONDS = 15.0
 DEFAULT_RETRY_ATTEMPTS = 2
@@ -270,13 +269,4 @@ async def fetch_important_events(
 ) -> dict[str, Any]:
     settings = settings or get_settings()
     url = str(_setting(settings, "sportybet_facts_url", DEFAULT_FACTS_URL))
-    return await fetch_facts_center(url, settings=settings, client=client)
-
-
-async def fetch_live_or_prematch_events(
-    settings: Settings | None = None,
-    client: httpx.AsyncClient | None = None,
-) -> dict[str, Any]:
-    settings = settings or get_settings()
-    url = str(_setting(settings, "sportybet_live_url", DEFAULT_LIVE_URL))
     return await fetch_facts_center(url, settings=settings, client=client)

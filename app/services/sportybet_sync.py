@@ -118,7 +118,6 @@ class SyncSkip:
 class SyncSummary:
     success: bool
     source: str
-    type: str
     fetched: int
     created: int
     updated: int
@@ -127,15 +126,12 @@ class SyncSummary:
     skipped_protected: int
     failed: int
     unsupported_markets: int
-    live_updated: int
-    ended_updated: int
     skipped: list[SyncSkip]
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "source": self.source,
-            "type": self.type,
             "fetched": self.fetched,
             "created": self.created,
             "updated": self.updated,
@@ -144,8 +140,6 @@ class SyncSummary:
             "skipped_protected": self.skipped_protected,
             "failed": self.failed,
             "unsupported_markets": self.unsupported_markets,
-            "live_updated": self.live_updated,
-            "ended_updated": self.ended_updated,
             "skipped": [
                 {
                     "event_id": item.event_id,
@@ -276,7 +270,6 @@ def extract_scores(raw: dict[str, Any]) -> tuple[int | None, int | None]:
             home = _int_or_none(live.get("homeScore") or live.get("home"))
         if away is None:
             away = _int_or_none(live.get("awayScore") or live.get("away"))
-    # liveOrPrematchEvents uses setScore ("2:1") instead of homeScore/awayScore.
     if home is None or away is None:
         set_home, set_away = _score_from_colon(raw.get("setScore"))
         if home is None:
@@ -773,14 +766,11 @@ def upsert_parsed_game(db: Session, parsed: ParsedGame) -> str:
 def sync_sportybet_payload(
     db: Session,
     payload: dict[str, Any],
-    *,
-    sync_type: str = "important_events",
 ) -> dict[str, Any]:
     raw_events = extract_raw_events(payload)
     summary = SyncSummary(
         success=True,
         source="sportybet",
-        type=sync_type,
         fetched=len(raw_events),
         created=0,
         updated=0,
@@ -789,8 +779,6 @@ def sync_sportybet_payload(
         skipped_protected=0,
         failed=0,
         unsupported_markets=0,
-        live_updated=0,
-        ended_updated=0,
         skipped=[],
     )
     pending = 0
@@ -804,11 +792,6 @@ def sync_sportybet_payload(
                 result = upsert_parsed_game(db, parsed)
             summary.unsupported_markets += unsupported
             setattr(summary, result, getattr(summary, result) + 1)
-            if result in {"created", "updated"}:
-                if parsed.status == "live":
-                    summary.live_updated += 1
-                elif parsed.status == "finished":
-                    summary.ended_updated += 1
             pending += 1
             if pending >= BATCH_SIZE:
                 db.commit()
