@@ -57,6 +57,43 @@ class Settings(BaseSettings):
     )
     payment_currency: str = Field(default="GHS", validation_alias="PAYMENT_CURRENCY")
 
+    sportybet_facts_url: str = Field(
+        default="https://www.sportybet.com/api/gh/factsCenter/importantEvents",
+        validation_alias="SPORTYBET_FACTS_URL",
+    )
+    sportybet_sport_id: str = Field(
+        default="sr:sport:1",
+        validation_alias="SPORTYBET_SPORT_ID",
+    )
+    sportybet_timeout_seconds: float = Field(
+        default=15.0,
+        validation_alias="SPORTYBET_TIMEOUT_SECONDS",
+    )
+    sportybet_retry_attempts: int = Field(
+        default=2,
+        validation_alias="SPORTYBET_RETRY_ATTEMPTS",
+    )
+    sportybet_client_id: str = Field(
+        default="web",
+        validation_alias="SPORTYBET_CLIENT_ID",
+    )
+    sportybet_oper_id: str = Field(
+        default="3",
+        validation_alias="SPORTYBET_OPER_ID",
+    )
+    sportybet_referer: str = Field(
+        default="https://www.sportybet.com/gh/",
+        validation_alias="SPORTYBET_REFERER",
+    )
+    sportybet_user_agent: str = Field(
+        default=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/128.0.0.0 Safari/537.36"
+        ),
+        validation_alias="SPORTYBET_USER_AGENT",
+    )
+
     @field_validator("environment")
     @classmethod
     def normalize_environment(cls, value: str) -> str:
@@ -69,6 +106,16 @@ class Settings(BaseSettings):
         if mode not in {"simulated", "paystack", "disabled"}:
             raise ValueError("PAYMENTS_MODE must be simulated, paystack, or disabled")
         return mode
+
+    @field_validator("sportybet_timeout_seconds")
+    @classmethod
+    def clamp_sportybet_timeout(cls, value: float) -> float:
+        return min(max(float(value), 1.0), 60.0)
+
+    @field_validator("sportybet_retry_attempts")
+    @classmethod
+    def clamp_sportybet_retries(cls, value: int) -> int:
+        return min(max(int(value), 1), 3)
 
     @property
     def is_production(self) -> bool:

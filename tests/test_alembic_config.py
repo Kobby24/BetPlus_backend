@@ -16,6 +16,7 @@ EXPECTED_REVISIONS = (
     "001_initial",
     "002_ops_ledger",
     "003_production_hardening",
+    "004_sportybet_external_ids",
 )
 
 
@@ -51,6 +52,7 @@ def test_alembic_env_reads_database_url_from_environment():
     assert 'os.environ.get("DATABASE_URL")' in source
     assert "reject_sqlite_if_hosted" in source
     assert "prepare_database" in source
+    assert "connection.commit()" in source
     assert "disable_existing_loggers=False" in source
 
 
@@ -58,25 +60,33 @@ def test_alembic_upgrade_head_on_sqlite(tmp_path, monkeypatch):
     from alembic import command
     from sqlalchemy import create_engine, inspect, text
 
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("DATABASE_URL", "sqlite:///alembic_sqlite.db")
+    from app.core.config import reset_settings_cache
+
+    db_path = (tmp_path / "alembic_sqlite.db").resolve()
+    db_url = f"sqlite:///{db_path.as_posix()}"
+    monkeypatch.setenv("DATABASE_URL", db_url)
     monkeypatch.setenv("ENVIRONMENT", "development")
     monkeypatch.delenv("DYNO", raising=False)
+    reset_settings_cache()
 
     cfg = Config(str(ALEMBIC_INI))
     cfg.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     command.upgrade(cfg, "head")
 
-    engine = create_engine("sqlite:///alembic_sqlite.db")
+    engine = create_engine(db_url)
     tables = set(inspect(engine).get_table_names())
     assert "games" in tables
     assert "payment_intents" in tables
     assert "idempotency_keys" in tables
     assert "rate_limit_hits" in tables
+    game_cols = {col["name"] for col in inspect(engine).get_columns("games")}
+    assert "external_event_id" in game_cols
+    assert "external_game_id" in game_cols
     with engine.connect() as conn:
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
     engine.dispose()
-    assert version == "003_production_hardening"
+    reset_settings_cache()
+    assert version == "004_sportybet_external_ids"
 
 
 def test_alembic_has_single_expected_head():
@@ -84,7 +94,7 @@ def test_alembic_has_single_expected_head():
     cfg.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     script = ScriptDirectory.from_config(cfg)
     heads = script.get_heads()
-    assert heads == ["003_production_hardening"]
+    assert heads == ["004_sportybet_external_ids"]
 
     revisions = list(script.walk_revisions())
     ids = [rev.revision for rev in reversed(revisions)]

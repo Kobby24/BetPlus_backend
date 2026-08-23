@@ -1,9 +1,9 @@
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
-from app.db.schema_status import missing_required_columns
 from app.db.session import get_db
 from app.models.game import Game
 from app.models.league import League
@@ -15,6 +15,21 @@ from app.services.sportybet_client import SportyBetUpstreamError, fetch_importan
 from app.services.sportybet_sync import CatalogSchemaError, sync_sportybet_payload
 
 router = APIRouter()
+
+_SPORTYBET_GAME_COLUMNS = ("external_event_id", "external_game_id")
+
+
+def missing_required_columns(bind) -> list[str]:
+    inspector = inspect(bind)
+    tables = set(inspector.get_table_names())
+    if "games" not in tables:
+        return [f"games.{name}" for name in _SPORTYBET_GAME_COLUMNS]
+    existing = {col["name"] for col in inspector.get_columns("games")}
+    return [
+        f"games.{name}"
+        for name in _SPORTYBET_GAME_COLUMNS
+        if name not in existing
+    ]
 
 
 @router.get("/sports", response_model=List[SportOut])

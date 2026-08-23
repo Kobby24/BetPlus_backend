@@ -4,7 +4,7 @@ from jose import JWTError
 from sqlalchemy.orm import Session
 
 from app.core.security import decode_access_token
-from app.db.schema_status import missing_required_tables
+from app.db.schema_status import missing_required_columns, missing_required_tables
 from app.db.session import get_db
 from app.models.user import User
 
@@ -12,7 +12,9 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
 def require_migrated_schema(db: Session = Depends(get_db)) -> None:
-    missing = missing_required_tables(db.get_bind())
+    missing = missing_required_tables(db.get_bind()) + missing_required_columns(
+        db.get_bind()
+    )
     if missing:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
