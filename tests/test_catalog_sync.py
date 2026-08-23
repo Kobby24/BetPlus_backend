@@ -408,6 +408,29 @@ def test_concurrent_sync_does_not_duplicate(clean_imported_games):
         db.close()
 
 
+def test_endpoint_returns_503_when_schema_is_not_migrated(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.v1.catalog.missing_required_columns",
+        lambda _bind: ["games.external_event_id", "games.external_game_id"],
+    )
+    called = {"fetch": False}
+
+    async def fake_fetch(*args, **kwargs):
+        called["fetch"] = True
+        return load_fixture()
+
+    monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", fake_fetch)
+    resp = client.post(SYNC_URL)
+    assert resp.status_code == 503
+    assert "alembic upgrade head" in resp.json()["detail"]
+    assert "games.external_event_id" in resp.json()["detail"]
+    assert called["fetch"] is False
+
+    legacy = client.post("/api/catalog/sync/sportybet")
+    assert legacy.status_code == 503
+    assert called["fetch"] is False
+
+
 def test_endpoint_is_public(client, monkeypatch, clean_imported_games):
     async def fake_fetch(*args, **kwargs):
         return load_fixture()

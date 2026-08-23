@@ -74,6 +74,11 @@ def run_migrations_online() -> None:
 
         with context.begin_transaction():
             context.run_migrations()
+        # SQLAlchemy 2 autobegins a transaction on connect(). SQLite reports
+        # transactional_ddl=False, so Alembic does not commit that transaction
+        # itself — without this, upgrade logs success then rolls back 002+.
+        if connection.in_transaction():
+            connection.commit()
 
 
 if context.is_offline_mode():

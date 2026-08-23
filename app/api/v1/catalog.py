@@ -3,6 +3,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.db.schema_status import missing_required_columns
 from app.db.session import get_db
 from app.models.game import Game
 from app.models.league import League
@@ -11,7 +12,7 @@ from app.schemas import GameOut, LeagueOut, SportOut, SportyBetSyncOut
 from app.services.audit_service import AuditService
 from app.services.catalog_service import catalog_game_view
 from app.services.sportybet_client import SportyBetUpstreamError, fetch_important_events
-from app.services.sportybet_sync import sync_sportybet_payload
+from app.services.sportybet_sync import CatalogSchemaError, sync_sportybet_payload
 
 router = APIRouter()
 
@@ -57,12 +58,25 @@ def get_game(external_id: str, db: Session = Depends(get_db)):
 
 @router.post("/sync/sportybet", response_model=SportyBetSyncOut)
 async def sync_sportybet(db: Session = Depends(get_db)):
+    missing = missing_required_columns(db.get_bind())
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "database schema is not migrated (missing "
+                + ", ".join(missing)
+                + "); run alembic upgrade head"
+            ),
+        )
     try:
         payload = await fetch_important_events()
     except SportyBetUpstreamError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
-    summary = sync_sportybet_payload(db, payload)
+    try:
+        summary = sync_sportybet_payload(db, payload)
+    except CatalogSchemaError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     AuditService.log(
         db,
         actor_id=None,

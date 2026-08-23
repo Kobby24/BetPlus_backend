@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.core.money import to_decimal
@@ -66,6 +66,10 @@ SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 class InvalidSportyBetEvent(ValueError):
     """A single upstream event cannot be imported."""
+
+
+class CatalogSchemaError(RuntimeError):
+    """Database schema cannot store SportyBet identifiers."""
 
 
 @dataclass
@@ -755,13 +759,39 @@ def sync_sportybet_payload(db: Session, payload: dict[str, Any]) -> dict[str, An
                 game_id,
                 exc,
             )
-        except Exception:
+        except ProgrammingError as exc:
+            db.rollback()
+            pending = 0
+            orig = str(getattr(exc, "orig", exc))
+            if "external_event_id" in orig or "external_game_id" in orig:
+                raise CatalogSchemaError(
+                    "database schema is not migrated (missing "
+                    "games.external_event_id / games.external_game_id); "
+                    "run alembic upgrade head"
+                ) from exc
             summary.failed += 1
             summary.skipped.append(
                 SyncSkip(
                     event_id=event_id or None,
                     game_id=game_id or None,
-                    reason="unexpected error while importing event",
+                    reason=orig.split("\n", 1)[0][:180] or "database error",
+                )
+            )
+            logger.exception(
+                "Failed to import SportyBet event eventId=%s gameId=%s",
+                event_id,
+                game_id,
+            )
+        except Exception as exc:
+            db.rollback()
+            pending = 0
+            summary.failed += 1
+            summary.skipped.append(
+                SyncSkip(
+                    event_id=event_id or None,
+                    game_id=game_id or None,
+                    reason=str(exc).split("\n", 1)[0][:180]
+                    or "unexpected error while importing event",
                 )
             )
             logger.exception(
