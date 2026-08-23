@@ -4,12 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_admin
 from app.db.session import get_db
 from app.models.game import Game
 from app.models.league import League
 from app.models.sport import Sport
-from app.models.user import User
 from app.schemas import GameOut, LeagueOut, SportOut, SportyBetLiveSyncOut, SportyBetSyncOut
 from app.services.audit_service import AuditService
 from app.services.catalog_service import catalog_game_view
@@ -121,10 +119,7 @@ async def sync_sportybet(db: Session = Depends(get_db)):
 
 
 @router.post("/sync/sportybet/live", response_model=SportyBetLiveSyncOut)
-async def sync_sportybet_live(
-    db: Session = Depends(get_db),
-    admin: User = Depends(require_admin),
-):
+async def sync_sportybet_live(db: Session = Depends(get_db)):
     missing = missing_required_columns(db.get_bind())
     if missing:
         raise HTTPException(
@@ -146,8 +141,8 @@ async def sync_sportybet_live(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     AuditService.log(
         db,
-        actor_id=admin.id,
-        role="admin",
+        actor_id=None,
+        role="system",
         action="Sync SportyBet live catalog",
         detail=(
             f"fetched={summary['fetched']} created={summary['created']} "

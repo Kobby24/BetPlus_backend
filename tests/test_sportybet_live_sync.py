@@ -32,7 +32,7 @@ from app.services.sportybet_live_parser import (
     public_live_match_id,
 )
 from app.services.sportybet_live_sync import sync_sportybet_live_games
-from tests.helpers import auth_headers, promote_user, register_and_token
+from tests.helpers import auth_headers, register_and_token
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "sportybet_live_or_prematch_events.json"
 PREMATCH_EVENT_ID = "sr:match:80000001"
@@ -83,17 +83,6 @@ def _count_games(event_id: str, game_id: str) -> int:
         )
     finally:
         db.close()
-
-
-def _admin_headers(client, email: str) -> dict[str, str]:
-    token = register_and_token(client, email)
-    promote_user(email, is_admin=True)
-    return auth_headers(token)
-
-
-def _user_headers(client, email: str) -> dict[str, str]:
-    token = register_and_token(client, email)
-    return auth_headers(token)
 
 
 class DummyResponse:
@@ -485,33 +474,27 @@ def test_concurrent_sync_does_not_duplicate(clean_imported_games):
     assert _count_games(ENDED_EVENT_ID, ENDED_GAME_ID) == 1
 
 
-# --- endpoint auth and HTTP ---
+# --- endpoint HTTP ---
 
 
-def test_live_endpoint_unauthorized(client):
-    resp = client.post(LIVE_SYNC_URL)
-    assert resp.status_code == 401
-
-
-def test_live_endpoint_non_admin_forbidden(client, monkeypatch):
+def test_live_endpoint_is_public(client, monkeypatch, clean_imported_games):
     async def fake_fetch(*args, **kwargs):
-        raise AssertionError("live fetch must not run for non-admin")
+        return load_fixture()
 
     monkeypatch.setattr("app.api.v1.catalog.fetch_live_or_prematch_events", fake_fetch)
-    headers = _user_headers(client, "live-user@example.com")
-    resp = client.post(LIVE_SYNC_URL, headers=headers)
-    assert resp.status_code == 403
+    resp = client.post(LIVE_SYNC_URL)
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
 
 
-def test_live_endpoint_admin_success_and_catalog_read(
+def test_live_endpoint_success_and_catalog_read(
     client, monkeypatch, clean_imported_games
 ):
     async def fake_fetch(*args, **kwargs):
         return load_fixture()
 
     monkeypatch.setattr("app.api.v1.catalog.fetch_live_or_prematch_events", fake_fetch)
-    headers = _admin_headers(client, "live-admin@example.com")
-    resp = client.post(LIVE_SYNC_URL, headers=headers)
+    resp = client.post(LIVE_SYNC_URL)
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
@@ -541,33 +524,31 @@ def test_live_endpoint_admin_success_and_catalog_read(
     assert one.status_code == 200
     assert one.json()["odds_home"] == 1.70
 
-    legacy = client.post(LEGACY_LIVE_SYNC_URL, headers=headers)
+    legacy = client.post(LEGACY_LIVE_SYNC_URL)
     assert legacy.status_code == 200
     assert legacy.json()["created"] == 0
 
 
 def test_live_endpoint_upstream_errors(client, monkeypatch):
-    headers = _admin_headers(client, "live-upstream-admin@example.com")
-
     async def timeout(*args, **kwargs):
         raise SportyBetLiveUpstreamError(
             "Upstream request timed out", status_code=504
         )
 
     monkeypatch.setattr("app.api.v1.catalog.fetch_live_or_prematch_events", timeout)
-    assert client.post(LIVE_SYNC_URL, headers=headers).status_code == 504
+    assert client.post(LIVE_SYNC_URL).status_code == 504
 
     async def bad_json(*args, **kwargs):
         raise SportyBetLiveUpstreamError("Upstream returned invalid JSON")
 
     monkeypatch.setattr("app.api.v1.catalog.fetch_live_or_prematch_events", bad_json)
-    assert client.post(LIVE_SYNC_URL, headers=headers).status_code == 502
+    assert client.post(LIVE_SYNC_URL).status_code == 502
 
     async def upstream_500(*args, **kwargs):
         raise SportyBetLiveUpstreamError("Upstream returned HTTP 500")
 
     monkeypatch.setattr("app.api.v1.catalog.fetch_live_or_prematch_events", upstream_500)
-    assert client.post(LIVE_SYNC_URL, headers=headers).status_code == 502
+    assert client.post(LIVE_SYNC_URL).status_code == 502
 
 
 def test_live_endpoint_does_not_call_important_events(
@@ -585,8 +566,7 @@ def test_live_endpoint_does_not_call_important_events(
 
     monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", fake_important)
     monkeypatch.setattr("app.api.v1.catalog.fetch_live_or_prematch_events", fake_live)
-    headers = _admin_headers(client, "live-isolation-admin@example.com")
-    resp = client.post(LIVE_SYNC_URL, headers=headers)
+    resp = client.post(LIVE_SYNC_URL)
     assert resp.status_code == 200
     assert called["live"] is True
     assert called["important"] is False
@@ -601,10 +581,9 @@ def test_finished_game_settlement_compatibility(
         return payload
 
     monkeypatch.setattr("app.api.v1.catalog.fetch_live_or_prematch_events", fake_fetch)
-    admin = _admin_headers(client, "live-settle-admin@example.com")
     user_token = register_and_token(client, "live-settle-user@example.com")
 
-    synced = client.post(LIVE_SYNC_URL, headers=admin)
+    synced = client.post(LIVE_SYNC_URL)
     assert synced.status_code == 200
 
     client.post(
