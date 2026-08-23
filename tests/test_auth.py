@@ -133,3 +133,117 @@ def test_invalid_login_rejected(client):
         data={"username": "lock@example.com", "password": "wrong"},
     )
     assert resp.status_code == 401
+
+
+def test_duplicate_email_rejected(client):
+    payload = {"name": "Dup", "email": "dup@example.com", "password": "secret1"}
+    first = client.post("/api/v1/auth/register", json=payload)
+    assert first.status_code == 201
+    second = client.post("/api/v1/auth/register", json=payload)
+    assert second.status_code == 400
+    assert "already" in second.json()["detail"].lower()
+
+
+def test_missing_and_invalid_registration_rejected(client):
+    missing = client.post("/api/v1/auth/register", json={"name": "X", "password": "secret1"})
+    assert missing.status_code == 422
+
+    invalid_email = client.post(
+        "/api/v1/auth/register",
+        json={"name": "X", "email": "not-an-email", "password": "secret1"},
+    )
+    assert invalid_email.status_code == 422
+
+
+def test_unicode_and_long_passwords_register_and_login(client):
+    unicode_email = "unicode-user@example.com"
+    unicode_password = "pässwörd-测试-🔐"
+    resp = client.post(
+        "/api/v1/auth/register",
+        json={"name": "Unicode", "email": unicode_email, "password": unicode_password},
+    )
+    assert resp.status_code == 201
+    login = client.post(
+        "/api/v1/auth/login",
+        data={"username": unicode_email, "password": unicode_password},
+    )
+    assert login.status_code == 200
+    assert login.json()["access_token"]
+
+    long_email = "long-pass@example.com"
+    long_password = "L" * 200
+    resp = client.post(
+        "/api/v1/auth/register",
+        json={"name": "Long", "email": long_email, "password": long_password},
+    )
+    assert resp.status_code == 201
+    login = client.post(
+        "/api/v1/auth/login",
+        data={"username": long_email, "password": long_password},
+    )
+    assert login.status_code == 200
+
+    too_long = client.post(
+        "/api/v1/auth/register",
+        json={"name": "TooLong", "email": "toolong@example.com", "password": "L" * 300},
+    )
+    assert too_long.status_code == 422
+
+
+def test_login_requires_form_urlencoded_not_json(client):
+    client.post(
+        "/api/v1/auth/register",
+        json={"name": "Form", "email": "form@example.com", "password": "secret1"},
+    )
+    json_login = client.post(
+        "/api/v1/auth/login",
+        json={"username": "form@example.com", "password": "secret1"},
+    )
+    assert json_login.status_code == 422
+
+    form_login = client.post(
+        "/api/v1/auth/login",
+        data={"username": "form@example.com", "password": "secret1"},
+    )
+    assert form_login.status_code == 200
+
+
+def test_me_rejects_missing_and_invalid_tokens(client):
+    assert client.get("/api/v1/auth/me").status_code == 401
+    assert client.get(
+        "/api/v1/auth/me", headers={"Authorization": "Bearer not-a-jwt"}
+    ).status_code == 401
+
+
+def test_legacy_bcrypt_user_can_login_and_hash_is_upgraded(client):
+    import bcrypt
+    from app.db.session import SessionLocal
+    from app.models.user import User
+
+    db = SessionLocal()
+    try:
+        user = User(
+            name="Legacy",
+            email="legacy-hash@example.com",
+            hashed_password=bcrypt.hashpw(b"secret1", bcrypt.gensalt()).decode(),
+        )
+        db.add(user)
+        db.commit()
+        user_id = user.id
+    finally:
+        db.close()
+
+    login = client.post(
+        "/api/v1/auth/login",
+        data={"username": "legacy-hash@example.com", "password": "secret1"},
+    )
+    assert login.status_code == 200
+
+    db = SessionLocal()
+    try:
+        stored = db.get(User, user_id)
+        assert stored is not None
+        assert stored.hashed_password.startswith("$argon2")
+    finally:
+        db.close()
+

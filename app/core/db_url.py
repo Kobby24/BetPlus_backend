@@ -15,6 +15,11 @@ def hosted_postgres_required(*, environment: str) -> bool:
     return environment in {"production", "staging"} or running_on_heroku()
 
 
+def looks_like_supabase(url: str) -> bool:
+    lowered = url.lower()
+    return "supabase.co" in lowered or "pooler.supabase.com" in lowered
+
+
 def normalize_database_url(
     url: str,
     *,
@@ -39,7 +44,9 @@ def normalize_database_url(
         url = "postgresql+psycopg2://" + url[len("postgresql://") :]
 
     if require_ssl is None:
-        require_ssl = hosted_postgres_required(environment=environment)
+        require_ssl = hosted_postgres_required(environment=environment) or looks_like_supabase(
+            url
+        )
     if url.startswith("postgresql+") and require_ssl:
         url = _ensure_sslmode(url)
 

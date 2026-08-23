@@ -1,19 +1,39 @@
 from datetime import datetime, timedelta, timezone
 
 from jose import jwt
-from passlib.context import CryptContext
+from pwdlib import PasswordHash
+from pwdlib.exceptions import UnknownHashError
+from pwdlib.hashers.argon2 import Argon2Hasher
+from pwdlib.hashers.bcrypt import BcryptHasher
 
 from app.core.config import get_settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# New passwords are hashed with argon2id. Existing bcrypt hashes (from the
+# previous passlib backend) still verify, then upgrade on login.
+#
+# Do not use passlib CryptContext(schemes=["bcrypt"]) with bcrypt>=4.1: passlib
+# 1.7.4 probes a 72+ byte password during wrap-bug detection, bcrypt 4.1+/5.x
+# raises ValueError, and hashing fails even for short passwords.
+_password_hash = PasswordHash((Argon2Hasher(), BcryptHasher()))
 
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    return _password_hash.hash(password)
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    try:
+        return _password_hash.verify(plain, hashed)
+    except (UnknownHashError, ValueError, TypeError):
+        return False
+
+
+def verify_and_update_password(plain: str, hashed: str) -> tuple[bool, str | None]:
+    """Return (ok, new_hash_or_None). new_hash is set when a legacy hash should be upgraded."""
+    try:
+        return _password_hash.verify_and_update(plain, hashed)
+    except (UnknownHashError, ValueError, TypeError):
+        return False, None
 
 
 def create_access_token(
