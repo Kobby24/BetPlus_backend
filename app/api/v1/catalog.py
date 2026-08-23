@@ -24,7 +24,9 @@ from app.services.sportybet_client import (
     fetch_important_events,
 )
 from app.services.sportybet_live_job import (
+    current_job_status_payload,
     enqueue_live_sync_job,
+    find_current_live_sync_job,
     job_queued_payload,
     job_status_payload,
 )
@@ -158,6 +160,22 @@ def enqueue_sportybet_live_sync(db: Session = Depends(get_db)):
     db.commit()
     db.refresh(job)
     return SportyBetLiveSyncQueuedOut.model_validate(job_queued_payload(job))
+
+
+@router.get("/sync/sportybet/live", response_model=SportyBetLiveSyncJobOut)
+def get_current_sportybet_live_sync_job(db: Session = Depends(get_db)):
+    missing = missing_live_sync_infrastructure(db.get_bind())
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "database schema is not migrated (missing "
+                + ", ".join(missing)
+                + "); run alembic upgrade head"
+            ),
+        )
+    job = find_current_live_sync_job(db)
+    return SportyBetLiveSyncJobOut.model_validate(current_job_status_payload(job))
 
 
 @router.get("/sync/sportybet/live/{job_id}", response_model=SportyBetLiveSyncJobOut)

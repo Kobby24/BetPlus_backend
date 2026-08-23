@@ -79,9 +79,13 @@ def test_live_sync_endpoints_are_public(client, clean_jobs):
     posted = client.post(LIVE_SYNC_URL)
     assert posted.status_code == 202
     job_id = posted.json()["job_id"]
-    status = client.get(_status_url(job_id))
-    assert status.status_code == 200
-    assert status.json()["status"] == "queued"
+    current = client.get(LIVE_SYNC_URL)
+    assert current.status_code == 200
+    assert current.json()["status"] == "queued"
+    assert current.json()["job_id"] == job_id
+    by_id = client.get(_status_url(job_id))
+    assert by_id.status_code == 200
+    assert by_id.json()["status"] == "queued"
 
 
 def test_post_returns_202_without_waiting_for_slow_sync(
@@ -109,8 +113,9 @@ def test_post_returns_202_without_waiting_for_slow_sync(
     assert elapsed < 2.0
     assert fetch_calls == []
 
-    status = client.get(_status_url(body["job_id"]))
+    status = client.get(LIVE_SYNC_URL)
     assert status.status_code == 200
+    assert status.json()["job_id"] == body["job_id"]
     assert status.json()["status"] == "queued"
     assert status.json()["completed_at"] is None
 
@@ -139,9 +144,10 @@ def test_worker_completes_job_and_updates_catalog(client, clean_jobs):
     processed = process_one_live_sync_job(fetch=fake_fetch)
     assert processed == job_id
 
-    status = client.get(_status_url(job_id))
+    status = client.get(LIVE_SYNC_URL)
     assert status.status_code == 200
     body = status.json()
+    assert body["job_id"] == job_id
     assert body["status"] == "completed"
     assert body["fetched"] == 5
     assert body["created"] >= 3
@@ -358,6 +364,71 @@ def test_post_does_not_call_important_events(client, monkeypatch, clean_jobs):
 def test_missing_job_status_is_404(client):
     resp = client.get(_status_url("00000000-0000-0000-0000-000000000000"))
     assert resp.status_code == 404
+
+
+def test_current_status_is_idle_when_no_jobs(client, clean_jobs):
+    resp = client.get(LIVE_SYNC_URL)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "idle"
+    assert body["job_id"] is None
+    assert body["fetched"] == 0
+
+
+def test_bot_polls_current_job_without_url_id(client, clean_jobs):
+    queued = client.post(LIVE_SYNC_URL)
+    assert queued.status_code == 202
+    stored_id = queued.json()["job_id"]
+
+    current = client.get(LIVE_SYNC_URL)
+    assert current.status_code == 200
+    assert current.json()["job_id"] == stored_id
+    assert current.json()["status"] == "queued"
+
+    async def fake_fetch(*args, **kwargs):
+        return load_fixture()
+
+    process_one_live_sync_job(fetch=fake_fetch)
+
+    finished = client.get(LIVE_SYNC_URL)
+    assert finished.status_code == 200
+    assert finished.json()["job_id"] == stored_id
+    assert finished.json()["status"] == "completed"
+
+    next_job = client.post(LIVE_SYNC_URL)
+    assert next_job.status_code == 202
+    next_id = next_job.json()["job_id"]
+    assert next_id != stored_id
+
+    latest = client.get(LIVE_SYNC_URL)
+    assert latest.status_code == 200
+    assert latest.json()["job_id"] == next_id
+    assert latest.json()["status"] == "queued"
+
+
+def test_current_status_prefers_active_job_over_older_completed(client, clean_jobs):
+    db = SessionLocal()
+    try:
+        old = SportyBetSyncJob(
+            id=new_uuid(),
+            sync_type="live_or_prematch",
+            status="completed",
+        )
+        db.add(old)
+        db.commit()
+        old_id = old.id
+    finally:
+        db.close()
+
+    posted = client.post(LIVE_SYNC_URL)
+    assert posted.status_code == 202
+    active_id = posted.json()["job_id"]
+    assert active_id != old_id
+
+    current = client.get(LIVE_SYNC_URL)
+    assert current.status_code == 200
+    assert current.json()["job_id"] == active_id
+    assert current.json()["status"] == "queued"
 
 
 def test_idempotent_worker_rerun_does_not_duplicate_games(clean_jobs):

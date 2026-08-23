@@ -55,6 +55,23 @@ def find_active_live_sync_job(db: Session) -> SportyBetSyncJob | None:
     )
 
 
+def find_latest_live_sync_job(db: Session) -> SportyBetSyncJob | None:
+    return (
+        db.query(SportyBetSyncJob)
+        .filter(SportyBetSyncJob.sync_type == LIVE_SYNC_TYPE)
+        .order_by(
+            SportyBetSyncJob.created_at.desc(),
+            SportyBetSyncJob.id.desc(),
+        )
+        .first()
+    )
+
+
+def find_current_live_sync_job(db: Session) -> SportyBetSyncJob | None:
+    """Job stored for the bot: the active one, otherwise the latest row."""
+    return find_active_live_sync_job(db) or find_latest_live_sync_job(db)
+
+
 def enqueue_live_sync_job(
     db: Session, *, actor_id: str | None = None
 ) -> tuple[SportyBetSyncJob, bool]:
@@ -114,6 +131,36 @@ def job_status_payload(job: SportyBetSyncJob) -> dict[str, Any]:
         "started_at": job.started_at,
         "completed_at": job.completed_at,
     }
+
+
+def idle_job_payload() -> dict[str, Any]:
+    return {
+        "job_id": None,
+        "status": "idle",
+        "sync_type": LIVE_SYNC_TYPE,
+        "fetched": 0,
+        "processed": 0,
+        "created": 0,
+        "updated": 0,
+        "unchanged": 0,
+        "skipped": 0,
+        "skipped_invalid": 0,
+        "skipped_protected": 0,
+        "failed": 0,
+        "live_updated": 0,
+        "ended_updated": 0,
+        "attempt_count": 0,
+        "error_message": None,
+        "created_at": None,
+        "started_at": None,
+        "completed_at": None,
+    }
+
+
+def current_job_status_payload(job: SportyBetSyncJob | None) -> dict[str, Any]:
+    if job is None:
+        return idle_job_payload()
+    return job_status_payload(job)
 
 
 def apply_summary_to_job(job: SportyBetSyncJob, summary: dict[str, Any]) -> None:

@@ -18,6 +18,11 @@ class SportyBetSyncJob(Base):
         Index("ix_sportybet_sync_jobs_status", "status"),
         Index("ix_sportybet_sync_jobs_sync_type_status", "sync_type", "status"),
         Index(
+            "ix_sportybet_sync_jobs_sync_type_created_at",
+            "sync_type",
+            "created_at",
+        ),
+        Index(
             "uq_sportybet_sync_jobs_active",
             "sync_type",
             unique=True,

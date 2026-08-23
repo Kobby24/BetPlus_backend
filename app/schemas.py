@@ -82,7 +82,7 @@ class SportyBetLiveSyncQueuedOut(BaseModel):
 
 
 class SportyBetLiveSyncJobOut(BaseModel):
-    job_id: str
+    job_id: str | None = None
     status: str
     sync_type: str = "live_or_prematch"
     fetched: int = 0
