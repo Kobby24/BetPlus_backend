@@ -27,6 +27,9 @@ Production deploy: see [`DEPLOY.md`](../DEPLOY.md).
 | `SEED_DEMO_USERS` | Seed `admin@betplus.com` / `admin123` — **never in production** |
 | `PAYMENTS_MODE` | `simulated` / `paystack` / `disabled` |
 | `RATE_LIMIT_ENABLED` | DB-backed limits for login, register, bets, webhooks |
+| `SPORTYBET_FACTS_URL` | Optional catalog sync URL (defaults to SportyBet Ghana facts-center) |
+| `SPORTYBET_SPORT_ID` | Upstream sport id (default `sr:sport:1` / football) |
+| `SPORTYBET_TIMEOUT_SECONDS` | Upstream HTTP timeout (1–60, default 15) |
 
 ## Migrations
 

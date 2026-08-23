@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.game import Game
@@ -27,8 +28,12 @@ class ManagerService:
                 name=sport_slug.replace("-", " ").title(),
                 slug=sport_slug,
             )
-            db.add(sport)
-            db.flush()
+            try:
+                with db.begin_nested():
+                    db.add(sport)
+                    db.flush()
+            except IntegrityError:
+                sport = db.query(Sport).filter(Sport.slug == sport_slug).one()
 
         slug = name.lower().replace(" ", "-")[:64] or "manual"
         league = (
@@ -39,9 +44,17 @@ class ManagerService:
         if league:
             return league
         league = League(sport_id=sport.id, name=name, slug=slug)
-        db.add(league)
-        db.flush()
-        return league
+        try:
+            with db.begin_nested():
+                db.add(league)
+                db.flush()
+            return league
+        except IntegrityError:
+            return (
+                db.query(League)
+                .filter(League.slug == slug, League.sport_id == sport.id)
+                .one()
+            )
 
     @staticmethod
     def _to_view(db: Session, game: Game) -> dict:

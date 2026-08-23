@@ -8,7 +8,7 @@ class UserRegister(BaseModel):
     name: str | None = Field(default=None, max_length=255)
     email: EmailStr
     phone: str | None = Field(default=None, max_length=32)
-    password: str = Field(min_length=6, max_length=256)
+    password: str = Field(min_length=6)
     referral_code: str | None = None
 
 
@@ -53,6 +53,26 @@ class LeagueOut(BaseModel):
     sport_id: int
     name: str
     slug: str
+
+
+class SportyBetSyncSkip(BaseModel):
+    event_id: str | None = None
+    game_id: str | None = None
+    reason: str
+
+
+class SportyBetSyncOut(BaseModel):
+    success: bool
+    source: str
+    fetched: int
+    created: int
+    updated: int
+    skipped_existing: int
+    skipped_invalid: int
+    skipped_protected: int = 0
+    failed: int
+    unsupported_markets: int = 0
+    skipped: list[SportyBetSyncSkip] = Field(default_factory=list)
 
 
 class GameOut(BaseModel):
@@ -169,8 +189,8 @@ class UserProfileUpdate(BaseModel):
 
 
 class PasswordChangeIn(BaseModel):
-    current_password: str = Field(min_length=1, max_length=256)
-    new_password: str = Field(min_length=6, max_length=256)
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=6)
 
 
 class UserSettingsUpdate(BaseModel):

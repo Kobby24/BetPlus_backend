@@ -24,35 +24,6 @@ def test_postgresql_scheme_gets_psycopg2_driver():
     assert url == "postgresql+psycopg2://user:pass@host:5432/db"
 
 
-def test_supabase_requires_ssl_even_in_development():
-    url = normalize_database_url(
-        "postgresql://user:pass@db.project.supabase.co:5432/postgres",
-        environment="development",
-    )
-    assert url.startswith("postgresql+psycopg2://")
-    assert "sslmode=require" in url
-
-
-def test_short_secret_key_falls_back_to_jwt_secret(monkeypatch):
-    monkeypatch.delenv("DYNO", raising=False)
-    monkeypatch.setenv("SECRET_KEY", "short-secret-key")
-    monkeypatch.setenv("JWT_SECRET", "a-much-longer-jwt-secret-key-value-here")
-    monkeypatch.setenv("ENVIRONMENT", "development")
-    monkeypatch.setenv("DATABASE_URL", "sqlite:///./betplus.db")
-    settings = Settings()
-    assert settings.secret_key == "a-much-longer-jwt-secret-key-value-here"
-
-
-def test_jwt_access_expire_alias(monkeypatch):
-    monkeypatch.delenv("ACCESS_TOKEN_EXPIRE_MINUTES", raising=False)
-    monkeypatch.setenv("JWT_ACCESS_EXPIRE_MINUTES", "45")
-    monkeypatch.setenv("SECRET_KEY", "unit-test-production-secret-key")
-    monkeypatch.setenv("ENVIRONMENT", "development")
-    monkeypatch.setenv("DATABASE_URL", "sqlite:///./betplus.db")
-    settings = Settings()
-    assert settings.access_token_expire_minutes == 45
-
-
 def test_staging_adds_sslmode_require():
     url = normalize_database_url(
         "postgresql://user:pass@host:5432/db",

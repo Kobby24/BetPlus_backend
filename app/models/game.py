@@ -1,4 +1,16 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.sql import func
 
 from app.db.base import Base
@@ -9,10 +21,17 @@ class Game(Base):
     __table_args__ = (
         Index("ix_games_status", "status"),
         Index("ix_games_starts_at", "starts_at"),
+        UniqueConstraint(
+            "external_event_id",
+            "external_game_id",
+            name="uq_games_external_event_game",
+        ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
     external_id = Column(String(64), unique=True, index=True, nullable=False)
+    external_event_id = Column(String(64), nullable=True, index=True)
+    external_game_id = Column(String(32), nullable=True, index=True)
     league_id = Column(Integer, ForeignKey("leagues.id"), nullable=False, index=True)
     home = Column(String, nullable=False)
     away = Column(String, nullable=False)
