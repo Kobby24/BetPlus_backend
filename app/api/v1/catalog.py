@@ -3,12 +3,10 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_admin
 from app.db.session import get_db
 from app.models.game import Game
 from app.models.league import League
 from app.models.sport import Sport
-from app.models.user import User
 from app.schemas import GameOut, LeagueOut, SportOut, SportyBetSyncOut
 from app.services.audit_service import AuditService
 from app.services.catalog_service import catalog_game_view
@@ -58,10 +56,7 @@ def get_game(external_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/sync/sportybet", response_model=SportyBetSyncOut)
-async def sync_sportybet(
-    db: Session = Depends(get_db),
-    admin: User = Depends(require_admin),
-):
+async def sync_sportybet(db: Session = Depends(get_db)):
     try:
         payload = await fetch_important_events()
     except SportyBetUpstreamError as exc:
@@ -70,8 +65,8 @@ async def sync_sportybet(
     summary = sync_sportybet_payload(db, payload)
     AuditService.log(
         db,
-        actor_id=admin.id,
-        role="admin",
+        actor_id=None,
+        role="system",
         action="Sync SportyBet catalog",
         detail=(
             f"fetched={summary['fetched']} created={summary['created']} "

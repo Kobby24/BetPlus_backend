@@ -21,7 +21,7 @@ from app.services.sportybet_sync import (
     public_match_id,
     sync_sportybet_payload,
 )
-from tests.helpers import auth_headers, promote_user, register_and_token
+from tests.helpers import auth_headers, register_and_token
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "sportybet_important_events.json"
 EXAMPLE_EVENT_ID = "sr:match:73761144"
@@ -141,19 +141,36 @@ def test_client_timeout(monkeypatch):
     assert dummy.calls == 2
 
 
+def _client_settings():
+    return type(
+        "S",
+        (),
+        {
+            "sportybet_facts_url": "https://example.test/facts",
+            "sportybet_sport_id": "sr:sport:1",
+            "sportybet_timeout_seconds": 1.0,
+            "sportybet_retry_attempts": 2,
+            "sportybet_client_id": "web",
+            "sportybet_oper_id": "3",
+            "sportybet_referer": "https://www.sportybet.com/gh/",
+            "sportybet_user_agent": "pytest",
+        },
+    )()
+
+
 def test_client_http_errors_and_invalid_json():
     dummy_500 = DummyAsyncClient(DummyResponse(503, text="nope"))
     with pytest.raises(SportyBetUpstreamError, match="HTTP 503"):
-        asyncio.run(fetch_important_events(client=dummy_500))
+        asyncio.run(fetch_important_events(settings=_client_settings(), client=dummy_500))
 
     dummy_400 = DummyAsyncClient(DummyResponse(403, text="denied"))
     with pytest.raises(SportyBetUpstreamError, match="HTTP 403"):
-        asyncio.run(fetch_important_events(client=dummy_400))
+        asyncio.run(fetch_important_events(settings=_client_settings(), client=dummy_400))
     assert dummy_400.calls == 1
 
     dummy_json = DummyAsyncClient(DummyResponse(200, payload=None, text="<html>"))
     with pytest.raises(SportyBetUpstreamError, match="invalid JSON"):
-        asyncio.run(fetch_important_events(client=dummy_json))
+        asyncio.run(fetch_important_events(settings=_client_settings(), client=dummy_json))
 
 
 def test_successful_import_and_catalog_shape(clean_imported_games):
@@ -370,31 +387,23 @@ def test_concurrent_sync_does_not_duplicate(clean_imported_games):
         db.close()
 
 
-def test_endpoint_requires_admin(client, monkeypatch):
-    async def fail_if_called(*args, **kwargs):
-        raise AssertionError("upstream should not be called")
-
-    monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", fail_if_called)
-
-    user = register_and_token(client, "sync-user@example.com")
-    denied = client.post(SYNC_URL, headers=auth_headers(user))
-    assert denied.status_code == 403
-
-    manager = register_and_token(client, "sync-manager@example.com")
-    promote_user("sync-manager@example.com", is_manager=True)
-    manager_denied = client.post(SYNC_URL, headers=auth_headers(manager))
-    assert manager_denied.status_code == 403
-
-
-def test_endpoint_admin_success_and_catalog_read(client, monkeypatch, clean_imported_games):
+def test_endpoint_is_public(client, monkeypatch, clean_imported_games):
     async def fake_fetch(*args, **kwargs):
         return load_fixture()
 
     monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", fake_fetch)
-    token = register_and_token(client, "sync-admin@example.com")
-    promote_user("sync-admin@example.com", is_admin=True)
+    resp = client.post(SYNC_URL)
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
 
-    resp = client.post(SYNC_URL, headers=auth_headers(token))
+
+def test_endpoint_success_and_catalog_read(client, monkeypatch, clean_imported_games):
+    async def fake_fetch(*args, **kwargs):
+        return load_fixture()
+
+    monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", fake_fetch)
+
+    resp = client.post(SYNC_URL)
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
@@ -419,26 +428,23 @@ def test_endpoint_admin_success_and_catalog_read(client, monkeypatch, clean_impo
 
 
 def test_endpoint_upstream_errors(client, monkeypatch):
-    token = register_and_token(client, "sync-errors-admin@example.com")
-    promote_user("sync-errors-admin@example.com", is_admin=True)
-
     async def timeout(*args, **kwargs):
         raise SportyBetUpstreamError("Upstream request timed out", status_code=504)
 
     monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", timeout)
-    assert client.post(SYNC_URL, headers=auth_headers(token)).status_code == 504
+    assert client.post(SYNC_URL).status_code == 504
 
     async def bad_json(*args, **kwargs):
         raise SportyBetUpstreamError("Upstream returned invalid JSON")
 
     monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", bad_json)
-    assert client.post(SYNC_URL, headers=auth_headers(token)).status_code == 502
+    assert client.post(SYNC_URL).status_code == 502
 
     async def upstream_500(*args, **kwargs):
         raise SportyBetUpstreamError("Upstream returned HTTP 500")
 
     monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", upstream_500)
-    assert client.post(SYNC_URL, headers=auth_headers(token)).status_code == 502
+    assert client.post(SYNC_URL).status_code == 502
 
 
 def test_imported_game_settlement_compatibility(client, monkeypatch, clean_imported_games):
@@ -447,10 +453,8 @@ def test_imported_game_settlement_compatibility(client, monkeypatch, clean_impor
 
     monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", fake_fetch)
     user_token = register_and_token(client, "sync-settle-user@example.com")
-    admin_token = register_and_token(client, "sync-settle-admin@example.com")
-    promote_user("sync-settle-admin@example.com", is_admin=True)
 
-    synced = client.post(SYNC_URL, headers=auth_headers(admin_token))
+    synced = client.post(SYNC_URL)
     assert synced.status_code == 200
 
     client.post(
