@@ -4,13 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_admin
 from app.db.session import get_db
 from app.models.game import Game
 from app.models.league import League
 from app.models.sport import Sport
 from app.models.sportybet_sync_job import SportyBetSyncJob
-from app.models.user import User
 from app.schemas import (
     GameOut,
     LeagueOut,
@@ -138,10 +136,7 @@ async def sync_sportybet(db: Session = Depends(get_db)):
     response_model=SportyBetLiveSyncQueuedOut,
     status_code=status.HTTP_202_ACCEPTED,
 )
-def enqueue_sportybet_live_sync(
-    db: Session = Depends(get_db),
-    admin: User = Depends(require_admin),
-):
+def enqueue_sportybet_live_sync(db: Session = Depends(get_db)):
     missing = missing_live_sync_infrastructure(db.get_bind())
     if missing:
         raise HTTPException(
@@ -152,11 +147,11 @@ def enqueue_sportybet_live_sync(
                 + "); run alembic upgrade head"
             ),
         )
-    job, created = enqueue_live_sync_job(db, actor_id=admin.id)
+    job, created = enqueue_live_sync_job(db, actor_id=None)
     AuditService.log(
         db,
-        actor_id=admin.id,
-        role="admin",
+        actor_id=None,
+        role="system",
         action="Queue SportyBet live catalog sync",
         detail=f"job_id={job.id} created={created} status={job.status}",
     )
@@ -166,11 +161,7 @@ def enqueue_sportybet_live_sync(
 
 
 @router.get("/sync/sportybet/live/{job_id}", response_model=SportyBetLiveSyncJobOut)
-def get_sportybet_live_sync_job(
-    job_id: str,
-    db: Session = Depends(get_db),
-    admin: User = Depends(require_admin),
-):
+def get_sportybet_live_sync_job(job_id: str, db: Session = Depends(get_db)):
     job = db.get(SportyBetSyncJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Sync job not found")

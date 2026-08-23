@@ -22,7 +22,6 @@ from app.services.sportybet_live_job import (
     recover_stale_live_sync_jobs,
 )
 from app.services.sportybet_live_parser import public_live_match_id
-from tests.helpers import auth_headers, promote_user, register_and_token
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "sportybet_live_or_prematch_events.json"
 LIVE_EVENT_ID = "sr:match:80000002"
@@ -57,17 +56,6 @@ def clean_jobs():
     reset_jobs_and_games()
 
 
-def _admin_headers(client, email: str) -> dict[str, str]:
-    token = register_and_token(client, email)
-    promote_user(email, is_admin=True)
-    return auth_headers(token)
-
-
-def _user_headers(client, email: str) -> dict[str, str]:
-    token = register_and_token(client, email)
-    return auth_headers(token)
-
-
 def _status_url(job_id: str) -> str:
     return f"{LIVE_SYNC_URL}/{job_id}"
 
@@ -87,15 +75,13 @@ def _count(event_id: str, game_id: str) -> int:
         db.close()
 
 
-def test_post_unauthorized(client):
-    assert client.post(LIVE_SYNC_URL).status_code == 401
-    assert client.get(_status_url("missing")).status_code == 401
-
-
-def test_post_and_status_non_admin_forbidden(client):
-    headers = _user_headers(client, "live-job-user@example.com")
-    assert client.post(LIVE_SYNC_URL, headers=headers).status_code == 403
-    assert client.get(_status_url("missing"), headers=headers).status_code == 403
+def test_live_sync_endpoints_are_public(client, clean_jobs):
+    posted = client.post(LIVE_SYNC_URL)
+    assert posted.status_code == 202
+    job_id = posted.json()["job_id"]
+    status = client.get(_status_url(job_id))
+    assert status.status_code == 200
+    assert status.json()["status"] == "queued"
 
 
 def test_post_returns_202_without_waiting_for_slow_sync(
@@ -112,9 +98,8 @@ def test_post_returns_202_without_waiting_for_slow_sync(
         "app.services.sportybet_live_job.fetch_live_or_prematch_events",
         slow_fetch,
     )
-    headers = _admin_headers(client, "live-job-fast@example.com")
     started = time.monotonic()
-    resp = client.post(LIVE_SYNC_URL, headers=headers)
+    resp = client.post(LIVE_SYNC_URL)
     elapsed = time.monotonic() - started
     assert resp.status_code == 202
     body = resp.json()
@@ -124,16 +109,15 @@ def test_post_returns_202_without_waiting_for_slow_sync(
     assert elapsed < 2.0
     assert fetch_calls == []
 
-    status = client.get(_status_url(body["job_id"]), headers=headers)
+    status = client.get(_status_url(body["job_id"]))
     assert status.status_code == 200
     assert status.json()["status"] == "queued"
     assert status.json()["completed_at"] is None
 
 
 def test_duplicate_post_reuses_active_job(client, clean_jobs):
-    headers = _admin_headers(client, "live-job-dup@example.com")
-    first = client.post(LIVE_SYNC_URL, headers=headers)
-    second = client.post(LIVE_SYNC_URL, headers=headers)
+    first = client.post(LIVE_SYNC_URL)
+    second = client.post(LIVE_SYNC_URL)
     assert first.status_code == 202
     assert second.status_code == 202
     assert first.json()["job_id"] == second.json()["job_id"]
@@ -145,8 +129,7 @@ def test_duplicate_post_reuses_active_job(client, clean_jobs):
 
 
 def test_worker_completes_job_and_updates_catalog(client, clean_jobs):
-    headers = _admin_headers(client, "live-job-run@example.com")
-    queued = client.post(LIVE_SYNC_URL, headers=headers)
+    queued = client.post(LIVE_SYNC_URL)
     assert queued.status_code == 202
     job_id = queued.json()["job_id"]
 
@@ -156,7 +139,7 @@ def test_worker_completes_job_and_updates_catalog(client, clean_jobs):
     processed = process_one_live_sync_job(fetch=fake_fetch)
     assert processed == job_id
 
-    status = client.get(_status_url(job_id), headers=headers)
+    status = client.get(_status_url(job_id))
     assert status.status_code == 200
     body = status.json()
     assert body["status"] == "completed"
@@ -173,7 +156,7 @@ def test_worker_completes_job_and_updates_catalog(client, clean_jobs):
     assert _count(LIVE_EVENT_ID, LIVE_GAME_ID) == 1
     assert _count(PREMATCH_EVENT_ID, PREMATCH_GAME_ID) == 1
 
-    legacy = client.post(LEGACY_LIVE_SYNC_URL, headers=headers)
+    legacy = client.post(LEGACY_LIVE_SYNC_URL)
     assert legacy.status_code == 202
     assert legacy.json()["status"] == "queued"
     assert legacy.json()["job_id"] != job_id
@@ -367,15 +350,13 @@ def test_post_does_not_call_important_events(client, monkeypatch, clean_jobs):
         return load_fixture()
 
     monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", fake_important)
-    headers = _admin_headers(client, "live-job-iso@example.com")
-    resp = client.post(LIVE_SYNC_URL, headers=headers)
+    resp = client.post(LIVE_SYNC_URL)
     assert resp.status_code == 202
     assert called["important"] is False
 
 
 def test_missing_job_status_is_404(client):
-    headers = _admin_headers(client, "live-job-404@example.com")
-    resp = client.get(_status_url("00000000-0000-0000-0000-000000000000"), headers=headers)
+    resp = client.get(_status_url("00000000-0000-0000-0000-000000000000"))
     assert resp.status_code == 404
 
 
