@@ -9,10 +9,10 @@
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
-
+*.pyc
 # testing
 /coverage
-
+/.venv
 # next.js
 /.next/
 /out/
