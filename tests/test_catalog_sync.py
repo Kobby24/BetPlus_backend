@@ -13,6 +13,7 @@ from app.services.bet_service import SettlementService
 from app.services.sportybet_client import (
     SportyBetUpstreamError,
     fetch_important_events,
+    sportybet_headers,
     validate_facts_payload,
 )
 from app.services.sportybet_sync import (
@@ -114,6 +115,21 @@ def test_parse_event_requires_identifiers():
         parse_event({"gameId": "33400", "homeTeamName": "A", "awayTeamName": "B"})
     with pytest.raises(Exception, match="gameId"):
         parse_event({"eventId": "sr:match:1", "homeTeamName": "A", "awayTeamName": "B"})
+
+
+def test_headers_work_when_settings_lack_sportybet_fields():
+    headers = sportybet_headers(object())
+    assert headers["Clientid"] == "web"
+    assert headers["Operid"] == "3"
+    assert headers["Platform"] == "web"
+    assert "Mozilla" in headers["User-Agent"]
+
+
+def test_fetch_uses_defaults_when_settings_lack_sportybet_fields():
+    dummy = DummyAsyncClient(DummyResponse(200, payload={"bizCode": 10000, "data": []}))
+    payload = asyncio.run(fetch_important_events(settings=object(), client=dummy))
+    assert payload["bizCode"] == 10000
+    assert dummy.calls == 1
 
 
 def test_client_timeout(monkeypatch):

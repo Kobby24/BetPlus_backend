@@ -18,6 +18,26 @@ logger = logging.getLogger("app.services.sportybet")
 
 TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
+DEFAULT_FACTS_URL = "https://www.sportybet.com/api/gh/factsCenter/importantEvents"
+DEFAULT_SPORT_ID = "sr:sport:1"
+DEFAULT_TIMEOUT_SECONDS = 15.0
+DEFAULT_RETRY_ATTEMPTS = 2
+DEFAULT_CLIENT_ID = "web"
+DEFAULT_OPER_ID = "3"
+DEFAULT_REFERER = "https://www.sportybet.com/gh/"
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/128.0.0.0 Safari/537.36"
+)
+
+
+def _setting(settings: object, name: str, default: Any) -> Any:
+    value = getattr(settings, name, default)
+    if value is None or value == "":
+        return default
+    return value
+
 
 class SportyBetUpstreamError(Exception):
     """Upstream SportyBet request failed in a way the API should surface."""
@@ -28,21 +48,22 @@ class SportyBetUpstreamError(Exception):
         self.status_code = status_code
 
 
-def sportybet_headers(settings: Settings) -> dict[str, str]:
+def sportybet_headers(settings: object) -> dict[str, str]:
     return {
         "Accept": "*/*",
         "Accept-Language": "en",
-        "Clientid": settings.sportybet_client_id,
+        "Clientid": str(_setting(settings, "sportybet_client_id", DEFAULT_CLIENT_ID)),
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "Operid": settings.sportybet_oper_id,
+        "Operid": str(_setting(settings, "sportybet_oper_id", DEFAULT_OPER_ID)),
         "Platform": "web",
-        "Referer": settings.sportybet_referer,
-        "User-Agent": settings.sportybet_user_agent,
+        "Referer": str(_setting(settings, "sportybet_referer", DEFAULT_REFERER)),
+        "User-Agent": str(_setting(settings, "sportybet_user_agent", DEFAULT_USER_AGENT)),
     }
 
 
-def _request_timeout(settings: Settings) -> httpx.Timeout:
-    total = settings.sportybet_timeout_seconds
+def _request_timeout(settings: object) -> httpx.Timeout:
+    total = float(_setting(settings, "sportybet_timeout_seconds", DEFAULT_TIMEOUT_SECONDS))
+    total = min(max(total, 1.0), 60.0)
     return httpx.Timeout(
         connect=min(5.0, total),
         read=total,
@@ -71,11 +92,12 @@ async def fetch_important_events(
     settings = settings or get_settings()
     headers = sportybet_headers(settings)
     params = {
-        "sportId": settings.sportybet_sport_id,
+        "sportId": str(_setting(settings, "sportybet_sport_id", DEFAULT_SPORT_ID)),
         "_t": str(int(time.time() * 1000)),
     }
-    url = settings.sportybet_facts_url
-    attempts = settings.sportybet_retry_attempts
+    url = str(_setting(settings, "sportybet_facts_url", DEFAULT_FACTS_URL))
+    attempts = int(_setting(settings, "sportybet_retry_attempts", DEFAULT_RETRY_ATTEMPTS))
+    attempts = min(max(attempts, 1), 3)
     timeout = _request_timeout(settings)
 
     async def _get(http: httpx.AsyncClient) -> dict[str, Any]:

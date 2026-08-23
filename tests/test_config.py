@@ -190,6 +190,14 @@ def test_local_development_still_allows_sqlite(monkeypatch):
     settings.validate_for_runtime()
 
 
+def test_settings_include_sportybet_defaults():
+    settings = Settings()
+    assert settings.sportybet_client_id == "web"
+    assert settings.sportybet_oper_id == "3"
+    assert settings.sportybet_facts_url.startswith("https://www.sportybet.com/")
+    assert settings.sportybet_sport_id == "sr:sport:1"
+
+
 def test_production_does_not_seed_demo_users(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("SECRET_KEY", "unit-test-production-secret-key")
