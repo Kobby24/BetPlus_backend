@@ -34,6 +34,8 @@ LIVE_STATUSES = frozenset(
         "halftime",
         "half time",
         "ht",
+        "h1",
+        "h2",
         "1h",
         "2h",
         "in progress",
@@ -116,6 +118,7 @@ class SyncSkip:
 class SyncSummary:
     success: bool
     source: str
+    type: str
     fetched: int
     created: int
     updated: int
@@ -124,12 +127,15 @@ class SyncSummary:
     skipped_protected: int
     failed: int
     unsupported_markets: int
+    live_updated: int
+    ended_updated: int
     skipped: list[SyncSkip]
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "source": self.source,
+            "type": self.type,
             "fetched": self.fetched,
             "created": self.created,
             "updated": self.updated,
@@ -138,6 +144,8 @@ class SyncSummary:
             "skipped_protected": self.skipped_protected,
             "failed": self.failed,
             "unsupported_markets": self.unsupported_markets,
+            "live_updated": self.live_updated,
+            "ended_updated": self.ended_updated,
             "skipped": [
                 {
                     "event_id": item.event_id,
@@ -240,6 +248,13 @@ def map_status(raw: dict[str, Any]) -> tuple[str, int]:
     return "scheduled", 0
 
 
+def _score_from_colon(value: Any) -> tuple[int | None, int | None]:
+    if not isinstance(value, str) or ":" not in value:
+        return None, None
+    left, right = value.split(":", 1)
+    return _int_or_none(left.strip()), _int_or_none(right.strip())
+
+
 def extract_scores(raw: dict[str, Any]) -> tuple[int | None, int | None]:
     home = _int_or_none(raw.get("homeScore") if "homeScore" in raw else raw.get("home_score"))
     away = _int_or_none(raw.get("awayScore") if "awayScore" in raw else raw.get("away_score"))
@@ -250,34 +265,57 @@ def extract_scores(raw: dict[str, Any]) -> tuple[int | None, int | None]:
         if away is None:
             away = _int_or_none(score.get("away") or score.get("awayScore"))
     elif isinstance(score, str) and ":" in score:
-        left, right = score.split(":", 1)
+        left, right = _score_from_colon(score)
         if home is None:
-            home = _int_or_none(left)
+            home = left
         if away is None:
-            away = _int_or_none(right)
+            away = right
     live = raw.get("liveData")
     if isinstance(live, dict):
         if home is None:
             home = _int_or_none(live.get("homeScore") or live.get("home"))
         if away is None:
             away = _int_or_none(live.get("awayScore") or live.get("away"))
+    # liveOrPrematchEvents uses setScore ("2:1") instead of homeScore/awayScore.
+    if home is None or away is None:
+        set_home, set_away = _score_from_colon(raw.get("setScore"))
+        if home is None:
+            home = set_home
+        if away is None:
+            away = set_away
     return home, away
+
+
+def _minute_from_played(value: Any) -> int | None:
+    if isinstance(value, str) and ":" in value:
+        left, right = value.split(":", 1)
+        minutes = _int_or_none(left.strip())
+        seconds = _int_or_none(right.strip())
+        if minutes is None or minutes < 0:
+            return None
+        if seconds is not None and seconds < 0:
+            return None
+        return minutes
+    seconds = _int_or_none(value)
+    if seconds is not None and seconds >= 0:
+        return seconds // 60
+    return None
 
 
 def extract_live_minute(raw: dict[str, Any]) -> int | None:
     for key in ("playedSeconds", "elapsedSeconds"):
-        seconds = _int_or_none(raw.get(key))
-        if seconds is not None and seconds >= 0:
-            return seconds // 60
+        minute = _minute_from_played(raw.get(key))
+        if minute is not None:
+            return minute
     for key in ("liveMinute", "matchTime", "minute"):
         minute = _int_or_none(raw.get(key))
         if minute is not None and minute >= 0:
             return minute
     live = raw.get("liveData")
     if isinstance(live, dict):
-        seconds = _int_or_none(live.get("playedSeconds"))
-        if seconds is not None and seconds >= 0:
-            return seconds // 60
+        minute = _minute_from_played(live.get("playedSeconds"))
+        if minute is not None:
+            return minute
         minute = _int_or_none(live.get("minute") or live.get("matchTime"))
         if minute is not None and minute >= 0:
             return minute
@@ -629,25 +667,39 @@ def apply_mutable_fields(game: Game, parsed: ParsedGame, league_id: int) -> bool
         ("away", parsed.away),
         ("home_abbr", parsed.home_abbr),
         ("away_abbr", parsed.away_abbr),
-        ("starts_at", parsed.starts_at),
         ("status", parsed.status),
         ("is_live", parsed.is_live),
-        ("live_minute", parsed.live_minute),
-        ("home_score", parsed.home_score),
-        ("away_score", parsed.away_score),
-        ("markets", parsed.markets or None),
     )
     for field_name, value in assignments:
         if getattr(game, field_name) != value:
             setattr(game, field_name, value)
             changed = True
-    if not _same_decimal(game.odds_home, parsed.odds_home):
+    if parsed.starts_at is not None and game.starts_at != parsed.starts_at:
+        game.starts_at = parsed.starts_at
+        changed = True
+    if parsed.is_live:
+        if parsed.live_minute is not None and game.live_minute != parsed.live_minute:
+            game.live_minute = parsed.live_minute
+            changed = True
+    elif game.live_minute is not None:
+        game.live_minute = None
+        changed = True
+    if parsed.home_score is not None and game.home_score != parsed.home_score:
+        game.home_score = parsed.home_score
+        changed = True
+    if parsed.away_score is not None and game.away_score != parsed.away_score:
+        game.away_score = parsed.away_score
+        changed = True
+    if parsed.markets and game.markets != parsed.markets:
+        game.markets = parsed.markets
+        changed = True
+    if parsed.odds_home is not None and not _same_decimal(game.odds_home, parsed.odds_home):
         game.odds_home = parsed.odds_home
         changed = True
-    if not _same_decimal(game.odds_draw, parsed.odds_draw):
+    if parsed.odds_draw is not None and not _same_decimal(game.odds_draw, parsed.odds_draw):
         game.odds_draw = parsed.odds_draw
         changed = True
-    if not _same_decimal(game.odds_away, parsed.odds_away):
+    if parsed.odds_away is not None and not _same_decimal(game.odds_away, parsed.odds_away):
         game.odds_away = parsed.odds_away
         changed = True
     return changed
@@ -718,11 +770,17 @@ def upsert_parsed_game(db: Session, parsed: ParsedGame) -> str:
         return "skipped_existing"
 
 
-def sync_sportybet_payload(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+def sync_sportybet_payload(
+    db: Session,
+    payload: dict[str, Any],
+    *,
+    sync_type: str = "important_events",
+) -> dict[str, Any]:
     raw_events = extract_raw_events(payload)
     summary = SyncSummary(
         success=True,
         source="sportybet",
+        type=sync_type,
         fetched=len(raw_events),
         created=0,
         updated=0,
@@ -731,6 +789,8 @@ def sync_sportybet_payload(db: Session, payload: dict[str, Any]) -> dict[str, An
         skipped_protected=0,
         failed=0,
         unsupported_markets=0,
+        live_updated=0,
+        ended_updated=0,
         skipped=[],
     )
     pending = 0
@@ -744,6 +804,11 @@ def sync_sportybet_payload(db: Session, payload: dict[str, Any]) -> dict[str, An
                 result = upsert_parsed_game(db, parsed)
             summary.unsupported_markets += unsupported
             setattr(summary, result, getattr(summary, result) + 1)
+            if result in {"created", "updated"}:
+                if parsed.status == "live":
+                    summary.live_updated += 1
+                elif parsed.status == "finished":
+                    summary.ended_updated += 1
             pending += 1
             if pending >= BATCH_SIZE:
                 db.commit()

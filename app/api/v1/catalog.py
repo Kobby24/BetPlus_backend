@@ -4,14 +4,20 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_admin
 from app.db.session import get_db
 from app.models.game import Game
 from app.models.league import League
 from app.models.sport import Sport
+from app.models.user import User
 from app.schemas import GameOut, LeagueOut, SportOut, SportyBetSyncOut
 from app.services.audit_service import AuditService
 from app.services.catalog_service import catalog_game_view
-from app.services.sportybet_client import SportyBetUpstreamError, fetch_important_events
+from app.services.sportybet_client import (
+    SportyBetUpstreamError,
+    fetch_important_events,
+    fetch_live_or_prematch_events,
+)
 from app.services.sportybet_sync import CatalogSchemaError, sync_sportybet_payload
 
 router = APIRouter()
@@ -97,6 +103,47 @@ async def sync_sportybet(db: Session = Depends(get_db)):
         actor_id=None,
         role="system",
         action="Sync SportyBet catalog",
+        detail=(
+            f"fetched={summary['fetched']} created={summary['created']} "
+            f"updated={summary['updated']} skipped_existing={summary['skipped_existing']} "
+            f"skipped_invalid={summary['skipped_invalid']} failed={summary['failed']}"
+        ),
+    )
+    db.commit()
+    return SportyBetSyncOut.model_validate(summary)
+
+
+@router.post("/sync/sportybet/live", response_model=SportyBetSyncOut)
+async def sync_sportybet_live(
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    missing = missing_required_columns(db.get_bind())
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "database schema is not migrated (missing "
+                + ", ".join(missing)
+                + "); run alembic upgrade head"
+            ),
+        )
+    try:
+        payload = await fetch_live_or_prematch_events()
+    except SportyBetUpstreamError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+    try:
+        summary = sync_sportybet_payload(
+            db, payload, sync_type="live_or_prematch"
+        )
+    except CatalogSchemaError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    AuditService.log(
+        db,
+        actor_id=admin.id,
+        role="admin",
+        action="Sync SportyBet live catalog",
         detail=(
             f"fetched={summary['fetched']} created={summary['created']} "
             f"updated={summary['updated']} skipped_existing={summary['skipped_existing']} "

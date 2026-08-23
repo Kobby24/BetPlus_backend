@@ -61,6 +61,10 @@ class Settings(BaseSettings):
         default="https://www.sportybet.com/api/gh/factsCenter/importantEvents",
         validation_alias="SPORTYBET_FACTS_URL",
     )
+    sportybet_live_url: str = Field(
+        default="https://www.sportybet.com/api/gh/factsCenter/liveOrPrematchEvents",
+        validation_alias="SPORTYBET_LIVE_URL",
+    )
     sportybet_sport_id: str = Field(
         default="sr:sport:1",
         validation_alias="SPORTYBET_SPORT_ID",

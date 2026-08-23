@@ -23,6 +23,7 @@ logger = logging.getLogger("app.services.sportybet")
 TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 DEFAULT_FACTS_URL = "https://www.sportybet.com/api/gh/factsCenter/importantEvents"
+DEFAULT_LIVE_URL = "https://www.sportybet.com/api/gh/factsCenter/liveOrPrematchEvents"
 DEFAULT_SPORT_ID = "sr:sport:1"
 DEFAULT_TIMEOUT_SECONDS = 15.0
 DEFAULT_RETRY_ATTEMPTS = 2
@@ -136,7 +137,8 @@ def _fetch_with_curl_cffi(
     return response.status_code, content_type, response.text or ""
 
 
-async def fetch_important_events(
+async def fetch_facts_center(
+    url: str,
     settings: Settings | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
@@ -146,7 +148,6 @@ async def fetch_important_events(
         "sportId": str(_setting(settings, "sportybet_sport_id", DEFAULT_SPORT_ID)),
         "_t": str(int(time.time() * 1000)),
     }
-    url = str(_setting(settings, "sportybet_facts_url", DEFAULT_FACTS_URL))
     attempts = int(_setting(settings, "sportybet_retry_attempts", DEFAULT_RETRY_ATTEMPTS))
     attempts = min(max(attempts, 1), 3)
     timeout = _request_timeout(settings)
@@ -261,3 +262,21 @@ async def fetch_important_events(
             timeout=timeout, follow_redirects=True
         ) as owned:
             return await _from_httpx(owned)
+
+
+async def fetch_important_events(
+    settings: Settings | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    settings = settings or get_settings()
+    url = str(_setting(settings, "sportybet_facts_url", DEFAULT_FACTS_URL))
+    return await fetch_facts_center(url, settings=settings, client=client)
+
+
+async def fetch_live_or_prematch_events(
+    settings: Settings | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    settings = settings or get_settings()
+    url = str(_setting(settings, "sportybet_live_url", DEFAULT_LIVE_URL))
+    return await fetch_facts_center(url, settings=settings, client=client)

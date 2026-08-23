@@ -195,6 +195,7 @@ def test_settings_include_sportybet_defaults():
     assert settings.sportybet_client_id == "web"
     assert settings.sportybet_oper_id == "3"
     assert settings.sportybet_facts_url.startswith("https://www.sportybet.com/")
+    assert settings.sportybet_live_url.endswith("liveOrPrematchEvents")
     assert settings.sportybet_sport_id == "sr:sport:1"
 
 
