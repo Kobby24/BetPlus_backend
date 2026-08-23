@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError, ProgrammingError
@@ -28,7 +29,7 @@ from app.services.sportybet_live_parser import (
 
 logger = logging.getLogger("app.services.sportybet_live")
 
-BATCH_SIZE = 50
+BATCH_SIZE = 100
 SKIP_DETAILS_LIMIT = 50
 
 
@@ -232,10 +233,53 @@ def _create_live_game(db: Session, parsed: ParsedLiveGame, league_id: int) -> Ga
     return game
 
 
-def upsert_live_game(db: Session, parsed: ParsedLiveGame) -> str:
-    existing = find_live_game(db, parsed.event_id, parsed.game_id)
-    sport = _get_or_create_sport(db, parsed.sport_slug, parsed.sport_name)
-    league = _get_or_create_league(db, sport, parsed.league_name, parsed.league_slug)
+def _cached_sport(
+    db: Session, parsed: ParsedLiveGame, sport_cache: dict[str, Sport]
+) -> Sport:
+    sport = sport_cache.get(parsed.sport_slug)
+    if sport is None:
+        sport = _get_or_create_sport(db, parsed.sport_slug, parsed.sport_name)
+        sport_cache[parsed.sport_slug] = sport
+    return sport
+
+
+def _cached_league(
+    db: Session,
+    parsed: ParsedLiveGame,
+    sport: Sport,
+    league_cache: dict[tuple[int, str], League],
+) -> League:
+    key = (sport.id, parsed.league_slug)
+    league = league_cache.get(key)
+    if league is None:
+        league = _get_or_create_league(db, sport, parsed.league_name, parsed.league_slug)
+        league_cache[key] = league
+    return league
+
+
+def upsert_live_game(
+    db: Session,
+    parsed: ParsedLiveGame,
+    *,
+    existing_map: dict[tuple[str, str], Game] | None = None,
+    sport_cache: dict[str, Sport] | None = None,
+    league_cache: dict[tuple[int, str], League] | None = None,
+    prefetched: bool = False,
+) -> str:
+    existing_map = existing_map if existing_map is not None else {}
+    sport_cache = sport_cache if sport_cache is not None else {}
+    league_cache = league_cache if league_cache is not None else {}
+    key = (parsed.event_id, parsed.game_id)
+    if prefetched:
+        existing = existing_map.get(key)
+    else:
+        existing = existing_map.get(key)
+        if existing is None:
+            existing = find_live_game(db, parsed.event_id, parsed.game_id)
+            if existing is not None:
+                existing_map[key] = existing
+    sport = _cached_sport(db, parsed, sport_cache)
+    league = _cached_league(db, parsed, sport, league_cache)
     if existing:
         if _is_protected(existing):
             return "skipped_protected"
@@ -247,7 +291,8 @@ def upsert_live_game(db: Session, parsed: ParsedLiveGame) -> str:
         return "unchanged"
     try:
         with db.begin_nested():
-            _create_live_game(db, parsed, league.id)
+            game = _create_live_game(db, parsed, league.id)
+        existing_map[key] = game
         return "created"
     except IntegrityError:
         raced = find_live_game(db, parsed.event_id, parsed.game_id)
@@ -259,6 +304,7 @@ def upsert_live_game(db: Session, parsed: ParsedLiveGame) -> str:
             )
         if raced is None:
             raise
+        existing_map[key] = raced
         if _is_protected(raced):
             return "skipped_protected"
         if apply_live_fields(raced, parsed, league.id):
@@ -267,6 +313,22 @@ def upsert_live_game(db: Session, parsed: ParsedLiveGame) -> str:
             db.flush()
             return "updated"
         return "unchanged"
+
+
+def _load_existing_games(db: Session, parsed_games: list[ParsedLiveGame]) -> dict[tuple[str, str], Game]:
+    event_ids = list({item.event_id for item in parsed_games})
+    if not event_ids:
+        return {}
+    rows = (
+        db.query(Game)
+        .filter(Game.external_event_id.in_(event_ids))
+        .all()
+    )
+    return {
+        (row.external_event_id, row.external_game_id): row
+        for row in rows
+        if row.external_event_id and row.external_game_id
+    }
 
 
 def _record_status_counters(summary: LiveSyncSummary, parsed: ParsedLiveGame, result: str) -> None:
@@ -288,6 +350,8 @@ class SportyBetLiveSyncService:
 def sync_sportybet_live_games(
     db: Session,
     payload: dict[str, Any],
+    *,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     raw_events = extract_live_raw_events(payload)
     summary = LiveSyncSummary(
@@ -305,20 +369,12 @@ def sync_sportybet_live_games(
         ended_updated=0,
         skipped=[],
     )
-    pending = 0
+    parsed_ok: list[tuple[dict[str, Any], ParsedLiveGame]] = []
     for raw in raw_events:
         event_id = _norm(raw.get("eventId")) if isinstance(raw, dict) else None
         game_id = _norm(raw.get("gameId")) if isinstance(raw, dict) else None
         try:
-            with db.begin_nested():
-                parsed = parse_live_event(raw)
-                result = upsert_live_game(db, parsed)
-            setattr(summary, result, getattr(summary, result) + 1)
-            _record_status_counters(summary, parsed, result)
-            pending += 1
-            if pending >= BATCH_SIZE:
-                db.commit()
-                pending = 0
+            parsed_ok.append((raw if isinstance(raw, dict) else {}, parse_live_event(raw)))
         except InvalidSportyBetLiveEvent as exc:
             summary.skipped_invalid += 1
             summary.skipped.append(
@@ -334,6 +390,37 @@ def sync_sportybet_live_games(
                 game_id,
                 exc,
             )
+
+    existing_map = _load_existing_games(db, [item[1] for item in parsed_ok])
+    sport_cache: dict[str, Sport] = {}
+    league_cache: dict[tuple[int, str], League] = {}
+    pending = 0
+
+    def _flush_progress() -> None:
+        nonlocal pending
+        db.commit()
+        pending = 0
+        if on_progress is not None:
+            on_progress(summary.as_dict())
+
+    for raw, parsed in parsed_ok:
+        event_id = parsed.event_id
+        game_id = parsed.game_id
+        try:
+            with db.begin_nested():
+                result = upsert_live_game(
+                    db,
+                    parsed,
+                    existing_map=existing_map,
+                    sport_cache=sport_cache,
+                    league_cache=league_cache,
+                    prefetched=True,
+                )
+            setattr(summary, result, getattr(summary, result) + 1)
+            _record_status_counters(summary, parsed, result)
+            pending += 1
+            if pending >= BATCH_SIZE:
+                _flush_progress()
         except ProgrammingError as exc:
             db.rollback()
             pending = 0
@@ -375,7 +462,9 @@ def sync_sportybet_live_games(
                 game_id,
             )
     if pending:
-        db.commit()
+        _flush_progress()
+    elif on_progress is not None:
+        on_progress(summary.as_dict())
     if summary.failed and not (
         summary.created or summary.updated or summary.unchanged
     ):

@@ -8,6 +8,7 @@ from app.models.payment import IdempotencyKey, PaymentIntent, RateLimitHit
 from app.models.platform_ledger import PlatformLedger
 from app.models.referral import ReferralDeposit
 from app.models.sport import Sport
+from app.models.sportybet_sync_job import SportyBetSyncJob
 from app.models.transaction import Transaction
 from app.models.user import User
 
@@ -23,6 +24,7 @@ __all__ = [
     "RateLimitHit",
     "ReferralDeposit",
     "Sport",
+    "SportyBetSyncJob",
     "Transaction",
     "User",
 ]

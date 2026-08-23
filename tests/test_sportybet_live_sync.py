@@ -474,117 +474,16 @@ def test_concurrent_sync_does_not_duplicate(clean_imported_games):
     assert _count_games(ENDED_EVENT_ID, ENDED_GAME_ID) == 1
 
 
-# --- endpoint HTTP ---
-
-
-def test_live_endpoint_is_public(client, monkeypatch, clean_imported_games):
-    async def fake_fetch(*args, **kwargs):
-        return load_fixture()
-
-    monkeypatch.setattr("app.api.v1.catalog.fetch_live_or_prematch_events", fake_fetch)
-    resp = client.post(LIVE_SYNC_URL)
-    assert resp.status_code == 200
-    assert resp.json()["success"] is True
-
-
-def test_live_endpoint_success_and_catalog_read(
-    client, monkeypatch, clean_imported_games
-):
-    async def fake_fetch(*args, **kwargs):
-        return load_fixture()
-
-    monkeypatch.setattr("app.api.v1.catalog.fetch_live_or_prematch_events", fake_fetch)
-    resp = client.post(LIVE_SYNC_URL)
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["success"] is True
-    assert body["source"] == "sportybet"
-    assert body["type"] == "live_or_prematch"
-    assert body["fetched"] == 5
-    assert body["created"] >= 3
-    assert body["skipped_invalid"] == 2
-    assert "live_updated" in body
-    assert "ended_updated" in body
-    assert "unchanged" in body
-    assert "setScore" not in json.dumps(body)
-
-    catalog = client.get("/api/v1/catalog/games")
-    assert catalog.status_code == 200
-    games = catalog.json()
-    match = next(g for g in games if g["external_id"] == LIVE_PUBLIC_ID)
-    assert match["home"] == "Hearts of Oak"
-    assert match["away"] == "Asante Kotoko"
-    assert match["status"] == "live"
-    assert match["is_live"] is True
-    assert match["home_score"] == 1
-    assert match["away_score"] == 0
-    assert match["live_minute"] == 32
-
-    one = client.get(f"/api/v1/catalog/games/{LIVE_PUBLIC_ID}")
-    assert one.status_code == 200
-    assert one.json()["odds_home"] == 1.70
-
-    legacy = client.post(LEGACY_LIVE_SYNC_URL)
-    assert legacy.status_code == 200
-    assert legacy.json()["created"] == 0
-
-
-def test_live_endpoint_upstream_errors(client, monkeypatch):
-    async def timeout(*args, **kwargs):
-        raise SportyBetLiveUpstreamError(
-            "Upstream request timed out", status_code=504
-        )
-
-    monkeypatch.setattr("app.api.v1.catalog.fetch_live_or_prematch_events", timeout)
-    assert client.post(LIVE_SYNC_URL).status_code == 504
-
-    async def bad_json(*args, **kwargs):
-        raise SportyBetLiveUpstreamError("Upstream returned invalid JSON")
-
-    monkeypatch.setattr("app.api.v1.catalog.fetch_live_or_prematch_events", bad_json)
-    assert client.post(LIVE_SYNC_URL).status_code == 502
-
-    async def upstream_500(*args, **kwargs):
-        raise SportyBetLiveUpstreamError("Upstream returned HTTP 500")
-
-    monkeypatch.setattr("app.api.v1.catalog.fetch_live_or_prematch_events", upstream_500)
-    assert client.post(LIVE_SYNC_URL).status_code == 502
-
-
-def test_live_endpoint_does_not_call_important_events(
-    client, monkeypatch, clean_imported_games
-):
-    called = {"important": False, "live": False}
-
-    async def fake_important(*args, **kwargs):
-        called["important"] = True
-        return load_fixture()
-
-    async def fake_live(*args, **kwargs):
-        called["live"] = True
-        return load_fixture()
-
-    monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", fake_important)
-    monkeypatch.setattr("app.api.v1.catalog.fetch_live_or_prematch_events", fake_live)
-    resp = client.post(LIVE_SYNC_URL)
-    assert resp.status_code == 200
-    assert called["live"] is True
-    assert called["important"] is False
-
-
-def test_finished_game_settlement_compatibility(
-    client, monkeypatch, clean_imported_games
-):
-    async def fake_fetch(*args, **kwargs):
+def test_finished_game_settlement_compatibility(client, clean_imported_games):
+    user_token = register_and_token(client, "live-settle-user@example.com")
+    db = SessionLocal()
+    try:
         payload = load_fixture()
         payload["data"][0]["events"] = [payload["data"][0]["events"][0]]
-        return payload
-
-    monkeypatch.setattr("app.api.v1.catalog.fetch_live_or_prematch_events", fake_fetch)
-    user_token = register_and_token(client, "live-settle-user@example.com")
-
-    synced = client.post(LIVE_SYNC_URL)
-    assert synced.status_code == 200
+        summary = sync_sportybet_live_games(db, payload)
+        assert summary["created"] >= 1
+    finally:
+        db.close()
 
     client.post(
         "/api/v1/wallet/deposit",

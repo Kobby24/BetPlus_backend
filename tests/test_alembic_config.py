@@ -17,6 +17,7 @@ EXPECTED_REVISIONS = (
     "002_ops_ledger",
     "003_production_hardening",
     "004_sportybet_external_ids",
+    "005_sportybet_sync_jobs",
 )
 
 
@@ -79,6 +80,7 @@ def test_alembic_upgrade_head_on_sqlite(tmp_path, monkeypatch):
     assert "payment_intents" in tables
     assert "idempotency_keys" in tables
     assert "rate_limit_hits" in tables
+    assert "sportybet_sync_jobs" in tables
     game_cols = {col["name"] for col in inspect(engine).get_columns("games")}
     assert "external_event_id" in game_cols
     assert "external_game_id" in game_cols
@@ -86,7 +88,7 @@ def test_alembic_upgrade_head_on_sqlite(tmp_path, monkeypatch):
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
     engine.dispose()
     reset_settings_cache()
-    assert version == "004_sportybet_external_ids"
+    assert version == "005_sportybet_sync_jobs"
 
 
 def test_alembic_has_single_expected_head():
@@ -94,7 +96,7 @@ def test_alembic_has_single_expected_head():
     cfg.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     script = ScriptDirectory.from_config(cfg)
     heads = script.get_heads()
-    assert heads == ["004_sportybet_external_ids"]
+    assert heads == ["005_sportybet_sync_jobs"]
 
     revisions = list(script.walk_revisions())
     ids = [rev.revision for rev in reversed(revisions)]

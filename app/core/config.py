@@ -77,6 +77,18 @@ class Settings(BaseSettings):
         default=2,
         validation_alias="SPORTYBET_LIVE_RETRY_ATTEMPTS",
     )
+    sportybet_live_sync_stale_seconds: float = Field(
+        default=600.0,
+        validation_alias="SPORTYBET_LIVE_SYNC_STALE_SECONDS",
+    )
+    sportybet_live_sync_poll_seconds: float = Field(
+        default=2.0,
+        validation_alias="SPORTYBET_LIVE_SYNC_POLL_SECONDS",
+    )
+    sportybet_live_sync_max_attempts: int = Field(
+        default=3,
+        validation_alias="SPORTYBET_LIVE_SYNC_MAX_ATTEMPTS",
+    )
     sportybet_sport_id: str = Field(
         default="sr:sport:1",
         validation_alias="SPORTYBET_SPORT_ID",
@@ -132,6 +144,21 @@ class Settings(BaseSettings):
     @classmethod
     def clamp_sportybet_retries(cls, value: int) -> int:
         return min(max(int(value), 1), 3)
+
+    @field_validator("sportybet_live_sync_stale_seconds")
+    @classmethod
+    def clamp_live_sync_stale(cls, value: float) -> float:
+        return min(max(float(value), 30.0), 3600.0)
+
+    @field_validator("sportybet_live_sync_poll_seconds")
+    @classmethod
+    def clamp_live_sync_poll(cls, value: float) -> float:
+        return min(max(float(value), 0.25), 30.0)
+
+    @field_validator("sportybet_live_sync_max_attempts")
+    @classmethod
+    def clamp_live_sync_attempts(cls, value: int) -> int:
+        return min(max(int(value), 1), 5)
 
     @property
     def is_production(self) -> bool:

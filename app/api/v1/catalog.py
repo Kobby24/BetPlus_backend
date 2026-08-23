@@ -1,27 +1,34 @@
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_admin
 from app.db.session import get_db
 from app.models.game import Game
 from app.models.league import League
 from app.models.sport import Sport
-from app.schemas import GameOut, LeagueOut, SportOut, SportyBetLiveSyncOut, SportyBetSyncOut
+from app.models.sportybet_sync_job import SportyBetSyncJob
+from app.models.user import User
+from app.schemas import (
+    GameOut,
+    LeagueOut,
+    SportOut,
+    SportyBetLiveSyncJobOut,
+    SportyBetLiveSyncQueuedOut,
+    SportyBetSyncOut,
+)
 from app.services.audit_service import AuditService
 from app.services.catalog_service import catalog_game_view
 from app.services.sportybet_client import (
     SportyBetUpstreamError,
     fetch_important_events,
 )
-from app.services.sportybet_live_client import (
-    SportyBetLiveUpstreamError,
-    fetch_live_or_prematch_events,
-)
-from app.services.sportybet_live_sync import (
-    LiveCatalogSchemaError,
-    sync_sportybet_live_games,
+from app.services.sportybet_live_job import (
+    enqueue_live_sync_job,
+    job_queued_payload,
+    job_status_payload,
 )
 from app.services.sportybet_sync import CatalogSchemaError, sync_sportybet_payload
 
@@ -41,6 +48,14 @@ def missing_required_columns(bind) -> list[str]:
         for name in _SPORTYBET_GAME_COLUMNS
         if name not in existing
     ]
+
+
+def missing_live_sync_infrastructure(bind) -> list[str]:
+    missing = missing_required_columns(bind)
+    inspector = inspect(bind)
+    if "sportybet_sync_jobs" not in inspector.get_table_names():
+        missing.append("sportybet_sync_jobs")
+    return missing
 
 
 @router.get("/sports", response_model=List[SportOut])
@@ -118,9 +133,16 @@ async def sync_sportybet(db: Session = Depends(get_db)):
     return SportyBetSyncOut.model_validate(summary)
 
 
-@router.post("/sync/sportybet/live", response_model=SportyBetLiveSyncOut)
-async def sync_sportybet_live(db: Session = Depends(get_db)):
-    missing = missing_required_columns(db.get_bind())
+@router.post(
+    "/sync/sportybet/live",
+    response_model=SportyBetLiveSyncQueuedOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def enqueue_sportybet_live_sync(
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    missing = missing_live_sync_infrastructure(db.get_bind())
     if missing:
         raise HTTPException(
             status_code=503,
@@ -130,25 +152,26 @@ async def sync_sportybet_live(db: Session = Depends(get_db)):
                 + "); run alembic upgrade head"
             ),
         )
-    try:
-        payload = await fetch_live_or_prematch_events()
-    except SportyBetLiveUpstreamError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
-
-    try:
-        summary = sync_sportybet_live_games(db, payload)
-    except LiveCatalogSchemaError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    job, created = enqueue_live_sync_job(db, actor_id=admin.id)
     AuditService.log(
         db,
-        actor_id=None,
-        role="system",
-        action="Sync SportyBet live catalog",
-        detail=(
-            f"fetched={summary['fetched']} created={summary['created']} "
-            f"updated={summary['updated']} unchanged={summary['unchanged']} "
-            f"skipped_invalid={summary['skipped_invalid']} failed={summary['failed']}"
-        ),
+        actor_id=admin.id,
+        role="admin",
+        action="Queue SportyBet live catalog sync",
+        detail=f"job_id={job.id} created={created} status={job.status}",
     )
     db.commit()
-    return SportyBetLiveSyncOut.model_validate(summary)
+    db.refresh(job)
+    return SportyBetLiveSyncQueuedOut.model_validate(job_queued_payload(job))
+
+
+@router.get("/sync/sportybet/live/{job_id}", response_model=SportyBetLiveSyncJobOut)
+def get_sportybet_live_sync_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    job = db.get(SportyBetSyncJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Sync job not found")
+    return SportyBetLiveSyncJobOut.model_validate(job_status_payload(job))

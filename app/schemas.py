@@ -75,20 +75,32 @@ class SportyBetSyncOut(BaseModel):
     skipped: list[SportyBetSyncSkip] = Field(default_factory=list)
 
 
-class SportyBetLiveSyncOut(BaseModel):
+class SportyBetLiveSyncQueuedOut(BaseModel):
     success: bool
-    source: str
-    type: str
-    fetched: int
-    created: int
-    updated: int
-    unchanged: int
-    skipped_invalid: int
+    status: str
+    job_id: str
+
+
+class SportyBetLiveSyncJobOut(BaseModel):
+    job_id: str
+    status: str
+    sync_type: str = "live_or_prematch"
+    fetched: int = 0
+    processed: int = 0
+    created: int = 0
+    updated: int = 0
+    unchanged: int = 0
+    skipped: int = 0
+    skipped_invalid: int = 0
     skipped_protected: int = 0
-    failed: int
+    failed: int = 0
     live_updated: int = 0
     ended_updated: int = 0
-    skipped: list[SportyBetSyncSkip] = Field(default_factory=list)
+    attempt_count: int = 0
+    error_message: str | None = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 class GameOut(BaseModel):

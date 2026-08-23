@@ -20,6 +20,7 @@ from app.models import (  # noqa: F401
     RateLimitHit,
     ReferralDeposit,
     Sport,
+    SportyBetSyncJob,
     Transaction,
     User,
 )
