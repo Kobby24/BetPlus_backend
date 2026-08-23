@@ -73,6 +73,9 @@ class DummyResponse:
         self.status_code = status_code
         self._payload = payload
         self.text = text or ("" if payload is None else json.dumps(payload))
+        self.headers = {
+            "content-type": "application/json" if payload is not None else "text/html"
+        }
 
     def json(self):
         if self._payload is None:
@@ -184,9 +187,11 @@ def test_client_http_errors_and_invalid_json():
         asyncio.run(fetch_important_events(settings=_client_settings(), client=dummy_400))
     assert dummy_400.calls == 1
 
-    dummy_json = DummyAsyncClient(DummyResponse(200, payload=None, text="<html>"))
-    with pytest.raises(SportyBetUpstreamError, match="invalid JSON"):
+    dummy_json = DummyAsyncClient(DummyResponse(200, payload=None, text="<html>challenge</html>"))
+    with pytest.raises(SportyBetUpstreamError, match="invalid JSON") as exc:
         asyncio.run(fetch_important_events(settings=_client_settings(), client=dummy_json))
+    assert "text/html" in exc.value.message
+    assert "challenge" in exc.value.message
 
 
 def test_successful_import_and_catalog_shape(clean_imported_games):
