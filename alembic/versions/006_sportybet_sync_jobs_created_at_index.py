@@ -1,27 +1,21 @@
-"""Index live-sync jobs for current-job lookup without a URL job_id."""
+"""Keep the old 006 filename on the linear chain.
+
+The first 006 revision id was longer than alembic_version.version_num
+(varchar 32) and must not stay in the graph. This file replaces that
+script in place so deploys that still include both 006 files have one head.
+"""
 
 from typing import Sequence, Union
 
-import sqlalchemy as sa
-from alembic import op
-
-revision: str = "006_sportybet_sync_jobs_created_at_index"
-down_revision: Union[str, None] = "005_sportybet_sync_jobs"
+revision: str = "006b_job_created_idx"
+down_revision: Union[str, None] = "006_live_sync_job_idx"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_index(
-        "ix_sportybet_sync_jobs_sync_type_created_at",
-        "sportybet_sync_jobs",
-        ["sync_type", "created_at"],
-        unique=False,
-    )
+    return
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_sportybet_sync_jobs_sync_type_created_at",
-        table_name="sportybet_sync_jobs",
-    )
+    return

@@ -19,6 +19,7 @@ EXPECTED_REVISIONS = (
     "004_sportybet_external_ids",
     "005_sportybet_sync_jobs",
     "006_live_sync_job_idx",
+    "006b_job_created_idx",
 )
 
 
@@ -58,6 +59,17 @@ def test_alembic_env_reads_database_url_from_environment():
     assert "disable_existing_loggers=False" in source
 
 
+def test_procfiles_use_migrate_entrypoint_not_upgrade_head():
+    root = BACKEND_ROOT.parent / "Procfile"
+    backend = BACKEND_ROOT / "Procfile"
+    root_text = root.read_text(encoding="utf-8")
+    backend_text = backend.read_text(encoding="utf-8")
+    assert "python -m app.db.migrate" in root_text
+    assert "python -m app.db.migrate" in backend_text
+    assert "alembic upgrade head" not in root_text
+    assert "alembic upgrade head" not in backend_text
+
+
 def test_alembic_upgrade_head_on_sqlite(tmp_path, monkeypatch):
     from alembic import command
     from sqlalchemy import create_engine, inspect, text
@@ -93,7 +105,7 @@ def test_alembic_upgrade_head_on_sqlite(tmp_path, monkeypatch):
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
     engine.dispose()
     reset_settings_cache()
-    assert version == "006_live_sync_job_idx"
+    assert version == "006b_job_created_idx"
 
 
 def test_alembic_has_single_expected_head():
@@ -101,7 +113,7 @@ def test_alembic_has_single_expected_head():
     cfg.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     script = ScriptDirectory.from_config(cfg)
     heads = script.get_heads()
-    assert heads == ["006_live_sync_job_idx"]
+    assert heads == ["006b_job_created_idx"]
 
     revisions = list(script.walk_revisions())
     ids = [rev.revision for rev in reversed(revisions)]
@@ -113,3 +125,6 @@ def test_alembic_has_single_expected_head():
         assert len(revision_id) <= 32, revision_id
         assert rev.down_revision == current
         current = revision_id
+
+    for rev in script.walk_revisions():
+        assert len(rev.revision) <= 32, rev.revision
