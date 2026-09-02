@@ -45,7 +45,9 @@ class Settings(BaseSettings):
     environment: str = Field(default="development", validation_alias="ENVIRONMENT")
     port: int = Field(default=8000, validation_alias="PORT")
 
-    rate_limit_enabled: bool = Field(default=True, validation_alias="RATE_LIMIT_ENABLED")
+    rate_limit_enabled: bool = Field(
+        default=True, validation_alias="RATE_LIMIT_ENABLED"
+    )
     payments_mode: str = Field(default="simulated", validation_alias="PAYMENTS_MODE")
     allow_simulated_payments: bool = Field(
         default=False, validation_alias="ALLOW_SIMULATED_PAYMENTS"
@@ -56,6 +58,22 @@ class Settings(BaseSettings):
         default="", validation_alias="PAYMENT_WEBHOOK_SECRET"
     )
     payment_currency: str = Field(default="GHS", validation_alias="PAYMENT_CURRENCY")
+
+    moolre_env: str = Field(default="sandbox", validation_alias="MOOLRE_ENV")
+    moolre_api_base_url: str = Field(
+        default="https://sandbox.moolre.com",
+        validation_alias="MOOLRE_API_BASE_URL",
+    )
+    moolre_api_user: str = Field(default="", validation_alias="MOOLRE_API_USER")
+    moolre_public_key: str = Field(default="", validation_alias="MOOLRE_PUBLIC_KEY")
+    moolre_api_key: str = Field(default="", validation_alias="MOOLRE_API_KEY")
+    moolre_account_number: str = Field(
+        default="", validation_alias="MOOLRE_ACCOUNT_NUMBER"
+    )
+    moolre_webhook_secret: str = Field(
+        default="", validation_alias="MOOLRE_WEBHOOK_SECRET"
+    )
+    moolre_callback_url: str = Field(default="", validation_alias="MOOLRE_CALLBACK_URL")
 
     sportybet_facts_url: str = Field(
         default="https://www.sportybet.com/api/gh/factsCenter/importantEvents",
@@ -131,9 +149,17 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_payments_mode(cls, value: str) -> str:
         mode = (value or "simulated").strip().lower()
-        if mode not in {"simulated", "paystack", "disabled"}:
-            raise ValueError("PAYMENTS_MODE must be simulated, paystack, or disabled")
+        if mode not in {"simulated", "moolre", "disabled"}:
+            raise ValueError("PAYMENTS_MODE must be simulated, moolre, or disabled")
         return mode
+
+    @field_validator("moolre_env")
+    @classmethod
+    def normalize_moolre_env(cls, value: str) -> str:
+        env = (value or "sandbox").strip().lower()
+        if env not in {"sandbox", "production", "live"}:
+            raise ValueError("MOOLRE_ENV must be sandbox or production")
+        return "production" if env == "live" else env
 
     @field_validator("sportybet_timeout_seconds", "sportybet_live_timeout_seconds")
     @classmethod
@@ -184,9 +210,7 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [
-            origin.strip()
-            for origin in self.cors_origins.split(",")
-            if origin.strip()
+            origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
         ]
 
     @property
@@ -226,7 +250,9 @@ class Settings(BaseSettings):
         if not self.is_production and not running_on_heroku():
             return
         if self.secret_key.startswith("dev-insecure"):
-            raise RuntimeError("SECRET_KEY must be set to a strong secret in production")
+            raise RuntimeError(
+                "SECRET_KEY must be set to a strong secret in production"
+            )
         if "*" in self.cors_origin_list:
             raise RuntimeError("CORS_ORIGINS must not include * in production")
         if not self.is_production:
@@ -236,6 +262,21 @@ class Settings(BaseSettings):
                 "PAYMENTS_MODE=simulated is not allowed in production unless "
                 "ALLOW_SIMULATED_PAYMENTS=true (staging/demo only; not real-money)"
             )
+        if self.payments_mode == "moolre":
+            missing = [
+                name
+                for name, value in {
+                    "MOOLRE_API_USER": self.moolre_api_user,
+                    "MOOLRE_PUBLIC_KEY": self.moolre_public_key,
+                    "MOOLRE_ACCOUNT_NUMBER": self.moolre_account_number,
+                }.items()
+                if not value
+            ]
+            if missing:
+                raise RuntimeError(
+                    "Missing required Moolre production configuration: "
+                    + ", ".join(missing)
+                )
 
 
 @lru_cache

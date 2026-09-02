@@ -25,6 +25,7 @@ def initiate_deposit(
             amount=payload.amount,
             channel=payload.channel,
             email=current_user.email,
+            payer_phone=payload.phone or payload.payer_phone or current_user.phone,
         )
         return intent
     except PaymentError as exc:
@@ -51,7 +52,11 @@ def initiate_withdrawal(
 
 
 @router.get("/{reference}", response_model=PaymentIntentOut)
-def get_payment(reference: str, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+def get_payment(
+    reference: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     intent = PaymentService.get_by_ref(db, reference)
     if not intent or intent.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Payment not found")
@@ -65,7 +70,9 @@ async def payment_webhook(
     x_paystack_signature: str | None = Header(default=None),
     x_webhook_signature: str | None = Header(default=None),
 ):
-    enforce_rate_limit(bucket=f"webhook:{client_ip(request)}", limit=120, window_seconds=60)
+    enforce_rate_limit(
+        bucket=f"webhook:{client_ip(request)}", limit=120, window_seconds=60
+    )
     raw = await request.body()
     signature = x_paystack_signature or x_webhook_signature
     if not PaymentService.verify_webhook_signature(raw, signature):
@@ -78,4 +85,8 @@ async def payment_webhook(
         intent = PaymentService.handle_webhook(db, payload)
     except PaymentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ok": True, "reference": intent.provider_ref if intent else None, "status": intent.status if intent else None}
+    return {
+        "ok": True,
+        "reference": intent.provider_ref if intent else None,
+        "status": intent.status if intent else None,
+    }

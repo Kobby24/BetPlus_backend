@@ -5,6 +5,7 @@ os.environ["DATABASE_URL"] = "sqlite:///./backend_test.db"
 os.environ["SECRET_KEY"] = "test-secret-key-not-for-production"
 os.environ["SEED_DEMO_DATA"] = "false"
 os.environ["ENVIRONMENT"] = "test"
+os.environ["PAYMENTS_MODE"] = "simulated"
 
 import pytest
 from fastapi.testclient import TestClient

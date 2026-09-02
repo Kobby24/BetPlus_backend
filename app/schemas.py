@@ -317,6 +317,8 @@ class ManagerLegPatch(BaseModel):
 class PaymentInitiateIn(BaseModel):
     amount: float = Field(gt=0)
     channel: str | None = Field(default="mobile_money", max_length=32)
+    phone: str | None = Field(default=None, max_length=32)
+    payer_phone: str | None = Field(default=None, max_length=32)
     destination: str | None = Field(default=None, max_length=255)
 
 

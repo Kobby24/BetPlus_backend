@@ -104,7 +104,7 @@ async def sync_sportybet(db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=503,
             detail=(
-                "database schema is not migrated ( "
+                "database schema is not migrated (missing "
                 + ", ".join(missing)
                 + "); run alembic upgrade head"
             ),
