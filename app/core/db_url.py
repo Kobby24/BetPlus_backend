@@ -44,9 +44,9 @@ def normalize_database_url(
         url = "postgresql+psycopg2://" + url[len("postgresql://") :]
 
     if require_ssl is None:
-        require_ssl = hosted_postgres_required(environment=environment) or looks_like_supabase(
-            url
-        )
+        require_ssl = hosted_postgres_required(
+            environment=environment
+        ) or looks_like_supabase(url)
     if url.startswith("postgresql+") and require_ssl:
         url = _ensure_sslmode(url)
 
@@ -73,5 +73,16 @@ def _ensure_sslmode(url: str) -> str:
 
 
 def uses_pgbouncer(url: str) -> bool:
+    """Return True only for actual PgBouncer/transaction-pool endpoints.
+
+    Supabase session-mode pooler URLs on port 5432 are still limited to a small
+    fixed number of sessions and should not be treated as a no-pool connection
+    strategy. We keep a conservative SQLAlchemy QueuePool there instead of
+    disabling pooling entirely.
+    """
     lowered = url.lower()
-    return "pooler.supabase.com" in lowered or ":6543" in lowered or "pgbouncer=true" in lowered
+    if "pgbouncer=true" in lowered:
+        return True
+    if ":6543" in lowered:
+        return True
+    return False

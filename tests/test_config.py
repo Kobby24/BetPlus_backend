@@ -57,11 +57,40 @@ def test_production_preserves_explicit_sslmode():
 
 
 def test_pgbouncer_detection_for_supabase_pooler():
-    pooler = "postgresql+psycopg2://user:pass@aws-0-eu.pooler.supabase.com:6543/postgres"
+    pooler = (
+        "postgresql+psycopg2://user:pass@aws-0-eu.pooler.supabase.com:6543/postgres"
+    )
     direct = "postgresql+psycopg2://user:pass@db.project.supabase.co:5432/postgres"
+    session_pooler = "postgresql+psycopg2://user:pass@aws-0-eu-north-1.pooler.supabase.com:5432/postgres"
     assert uses_pgbouncer(pooler)
     assert uses_pgbouncer("postgresql+psycopg2://user:pass@host:6543/postgres")
     assert not uses_pgbouncer(direct)
+    assert not uses_pgbouncer(session_pooler)
+
+
+def test_supabase_session_pooler_uses_conservative_pool_limits(monkeypatch):
+    from app.db.session import _build_engine
+    from app.core.config import reset_settings_cache
+
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://user:pass@aws-0-eu-north-1.pooler.supabase.com:5432/postgres",
+    )
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("SECRET_KEY", "unit-test-production-secret-key")
+    monkeypatch.setenv("CORS_ORIGINS", "https://example.com")
+    monkeypatch.setenv("PAYMENTS_MODE", "disabled")
+    reset_settings_cache()
+
+    engine = _build_engine()
+    try:
+        assert engine.pool.__class__.__name__ != "NullPool"
+        assert engine.pool.size() == 3
+        assert engine.pool._max_overflow == 2
+        assert engine.pool.timeout() == 30
+    finally:
+        engine.dispose()
+        reset_settings_cache()
 
 
 def test_settings_sqlalchemy_url_matches_app_normalization(monkeypatch):
