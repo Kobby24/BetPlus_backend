@@ -82,6 +82,11 @@ def list_games(
         selected_date, datetime.min.time(), tzinfo=timezone.utc
     )
     start_of_next_day = start_of_day + timedelta(days=1)
+    print(
+        f"[catalog.games] date={selected_date} "
+        f"range={start_of_day.isoformat()} to {start_of_next_day.isoformat()}",
+        flush=True,
+    )
     q = q.filter(Game.starts_at >= start_of_day, Game.starts_at < start_of_next_day)
     if league_id:
         q = q.filter(Game.league_id == league_id)
@@ -90,6 +95,11 @@ def list_games(
     if live is True:
         q = q.filter(Game.is_live == 1)
     games = q.order_by(Game.starts_at.asc()).all()
+    print(
+        f"[catalog.games] matched={len(games)} "
+        f"starts_at={[game.starts_at.isoformat() if game.starts_at else None for game in games]}",
+        flush=True,
+    )
     return [GameOut.model_validate(catalog_game_view(db, g)) for g in games]
 
 
