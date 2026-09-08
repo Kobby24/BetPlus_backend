@@ -44,11 +44,7 @@ def missing_required_columns(bind) -> list[str]:
     if "games" not in tables:
         return [f"games.{name}" for name in _SPORTYBET_GAME_COLUMNS]
     existing = {col["name"] for col in inspector.get_columns("games")}
-    return [
-        f"games.{name}"
-        for name in _SPORTYBET_GAME_COLUMNS
-        if name not in existing
-    ]
+    return [f"games.{name}" for name in _SPORTYBET_GAME_COLUMNS if name not in existing]
 
 
 def missing_live_sync_infrastructure(bind) -> list[str]:
