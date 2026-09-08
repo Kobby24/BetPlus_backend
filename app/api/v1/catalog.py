@@ -1,3 +1,4 @@
+from datetime import date, datetime, timedelta, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -76,9 +77,16 @@ def list_games(
     league_id: int | None = None,
     sport: str | None = None,
     live: bool | None = None,
+    date: date | None = None,
     db: Session = Depends(get_db),
 ):
     q = db.query(Game)
+    selected_date = date or datetime.now(timezone.utc).date()
+    start_of_day = datetime.combine(
+        selected_date, datetime.min.time(), tzinfo=timezone.utc
+    )
+    start_of_next_day = start_of_day + timedelta(days=1)
+    q = q.filter(Game.starts_at >= start_of_day, Game.starts_at < start_of_next_day)
     if league_id:
         q = q.filter(Game.league_id == league_id)
     if sport:
