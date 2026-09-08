@@ -70,7 +70,6 @@ def list_leagues(sport_id: int | None = None, db: Session = Depends(get_db)):
 
 @router.get("/games", response_model=List[GameOut])
 def list_games(
-    league_id: int | None = None,
     live: bool | None = None,
     date: date | None = None,
     db: Session = Depends(get_db),
@@ -87,8 +86,6 @@ def list_games(
         flush=True,
     )
     q = q.filter(Game.starts_at >= start_of_day, Game.starts_at < start_of_next_day)
-    if league_id:
-        q = q.filter(Game.league_id == league_id)
     if live is True:
         q = q.filter(Game.is_live == 1)
     games = q.order_by(Game.starts_at.asc()).all()
