@@ -7,14 +7,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from sqlalchemy.exc import IntegrityError, ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, engine
 from app.models.sportybet_sync_job import SportyBetSyncJob, new_uuid
 from app.services.sportybet_live_client import (
     SportyBetLiveUpstreamError,
@@ -41,6 +42,24 @@ def _now() -> datetime:
 def _safe_error(message: str) -> str:
     compact = " ".join(str(message or "live sync failed").split())
     return compact[:SAFE_ERROR_MAX]
+
+
+def _pool_status() -> str:
+    try:
+        return engine.pool.status()
+    except Exception:
+        return "unavailable"
+
+
+def _log_pool_status(message: str, *, job_id: str | None = None) -> None:
+    logger.info(
+        "%s worker=%s pid=%s job_id=%s pool=%s",
+        message,
+        os.environ.get("DYNO", "local"),
+        os.getpid(),
+        job_id or "-",
+        _pool_status(),
+    )
 
 
 def find_active_live_sync_job(db: Session) -> SportyBetSyncJob | None:
@@ -231,7 +250,9 @@ def recover_stale_live_sync_jobs(
     return len(stale)
 
 
-def claim_next_live_sync_job(db: Session) -> SportyBetSyncJob | None:
+def claim_next_live_sync_job(
+    db: Session, *, job_id: str | None = None
+) -> SportyBetSyncJob | None:
     q = (
         db.query(SportyBetSyncJob)
         .filter(
@@ -240,6 +261,8 @@ def claim_next_live_sync_job(db: Session) -> SportyBetSyncJob | None:
         )
         .order_by(SportyBetSyncJob.created_at.asc())
     )
+    if job_id is not None:
+        q = q.filter(SportyBetSyncJob.id == job_id)
     bind = db.get_bind()
     if bind is not None and bind.dialect.name == "postgresql":
         q = q.with_for_update(skip_locked=True)
@@ -281,58 +304,91 @@ def _await_fetch(fetch: FetchFn) -> dict[str, Any]:
     return result
 
 
-def _fail_job(db: Session, job: SportyBetSyncJob, message: str) -> None:
+def _load_job_snapshot(job_id: str) -> SportyBetSyncJob | None:
+    with SessionLocal() as db:
+        job = db.get(SportyBetSyncJob, job_id)
+        if job is None:
+            return None
+        db.expunge(job)
+        return job
+
+
+def _fail_job(job_id: str, message: str) -> SportyBetSyncJob | None:
+    with SessionLocal() as db:
+        try:
+            job = db.get(SportyBetSyncJob, job_id)
+            if job is None:
+                return None
+            job.status = "failed"
+            job.completed_at = _now()
+            job.error_message = _safe_error(message)
+            db.add(job)
+            db.commit()
+            db.refresh(job)
+            db.expunge(job)
+            return job
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            _log_pool_status("Live-sync failure status persisted", job_id=job_id)
+
+
+def _fail_job_in_session(
+    db: Session, job: SportyBetSyncJob, message: str
+) -> SportyBetSyncJob:
     job.status = "failed"
     job.completed_at = _now()
     job.error_message = _safe_error(message)
     db.add(job)
     db.commit()
+    db.refresh(job)
+    return job
 
 
 def execute_live_sync_job(
     job_id: str,
     *,
     fetch: FetchFn | None = None,
+    claimed: bool = False,
 ) -> SportyBetSyncJob:
-    """Run a claimed (or still-queued) job to completion in this process."""
+    """Run a job without holding a database connection during upstream HTTP work."""
     fetch_fn = fetch or fetch_live_or_prematch_events
-    db = SessionLocal()
+    if not claimed:
+        with SessionLocal() as claim_db:
+            job = claim_next_live_sync_job(claim_db, job_id=job_id)
+            if job is None:
+                snapshot = _load_job_snapshot(job_id)
+                if snapshot is None:
+                    raise LookupError(f"live sync job {job_id} not found")
+                return snapshot
+            claim_db.expunge(job)
+        claimed = True
+
+    _log_pool_status("Live-sync job claimed; starting upstream fetch", job_id=job_id)
     try:
-        job = db.get(SportyBetSyncJob, job_id)
-        if job is None:
-            raise LookupError(f"live sync job {job_id} not found")
-        if job.status in {"completed", "failed"}:
-            return job
-        if job.status == "queued":
-            claimed = (
-                db.query(SportyBetSyncJob)
-                .filter(
-                    SportyBetSyncJob.id == job.id,
-                    SportyBetSyncJob.status == "queued",
-                )
-                .update(
-                    {
-                        "status": "running",
-                        "started_at": _now(),
-                        "attempt_count": SportyBetSyncJob.attempt_count + 1,
-                        "error_message": None,
-                    },
-                    synchronize_session="fetch",
-                )
-            )
-            if not claimed:
-                db.commit()
-                db.refresh(job)
-                return job
-            db.commit()
-            db.refresh(job)
+        payload = _await_fetch(fetch_fn)
+        _log_pool_status("Upstream fetch completed; opening persistence session", job_id=job_id)
+    except SportyBetLiveUpstreamError as exc:
+        logger.warning("Live-sync job %s upstream failure: %s", job_id, exc.message)
+        return _fail_job(job_id, exc.message)  # type: ignore[return-value]
+    except Exception as exc:
+        logger.exception("Live-sync job %s fetch failed", job_id)
+        return _fail_job(job_id, str(exc))  # type: ignore[return-value]
 
-        def on_progress(summary: dict[str, Any]) -> None:
-            apply_summary_to_job(job, summary)
-            db.add(job)
-
+    with SessionLocal() as db:
         try:
-            payload = _await_fetch(fetch_fn)
+            job = db.get(SportyBetSyncJob, job_id)
+            if job is None:
+                raise LookupError(f"live sync job {job_id} not found")
+            if job.status != "running":
+                db.expunge(job)
+                return job
+
+            def on_progress(summary: dict[str, Any]) -> None:
+                apply_summary_to_job(job, summary)
+                db.add(job)
+
             summary = sync_sportybet_live_games(
                 db, payload, on_progress=on_progress
             )
@@ -350,49 +406,35 @@ def execute_live_sync_job(
                 job.created_count,
                 job.updated_count,
             )
+            _log_pool_status("Live-sync persistence committed", job_id=job_id)
             return job
         except SportyBetLiveUpstreamError as exc:
-            logger.warning("Live-sync job %s upstream failure: %s", job.id, exc.message)
-            _fail_job(db, job, exc.message)
-            db.refresh(job)
-            return job
+            logger.warning("Live-sync job %s upstream failure during persistence: %s", job_id, exc.message)
+            db.rollback()
+            return _fail_job_in_session(db, job, exc.message)
         except LiveCatalogSchemaError as exc:
-            logger.exception("Live-sync job %s schema error", job.id)
-            _fail_job(db, job, str(exc))
-            db.refresh(job)
-            return job
-        except ProgrammingError as exc:
+            logger.exception("Live-sync job %s schema error", job_id)
+            db.rollback()
+            return _fail_job_in_session(db, job, str(exc))
+        except (ProgrammingError, SQLAlchemyTimeoutError) as exc:
             db.rollback()
             orig = str(getattr(exc, "orig", exc)).split("\n", 1)[0]
-            logger.exception("Live-sync job %s database error", job.id)
-            job = db.get(SportyBetSyncJob, job_id)
-            if job:
-                _fail_job(db, job, orig or "database error")
-                db.refresh(job)
-                return job
-            raise
+            logger.exception("Live-sync job %s database error pool=%s", job_id, _pool_status())
+            return _fail_job_in_session(db, job, orig or "database error")
         except Exception as exc:
             db.rollback()
             logger.exception("Live-sync job %s failed", job_id)
-            job = db.get(SportyBetSyncJob, job_id)
-            if job:
-                _fail_job(db, job, str(exc))
-                db.refresh(job)
-                return job
-            raise
-    finally:
-        db.close()
+            return _fail_job_in_session(db, job, str(exc))
+        finally:
+            _log_pool_status("Live-sync persistence session closing", job_id=job_id)
 
 
 def process_one_live_sync_job(*, fetch: FetchFn | None = None) -> str | None:
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         recover_stale_live_sync_jobs(db)
         job = claim_next_live_sync_job(db)
         job_id = job.id if job else None
-    finally:
-        db.close()
     if not job_id:
         return None
-    execute_live_sync_job(job_id, fetch=fetch)
+    execute_live_sync_job(job_id, fetch=fetch, claimed=True)
     return job_id

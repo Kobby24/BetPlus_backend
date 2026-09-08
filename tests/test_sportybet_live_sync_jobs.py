@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, engine
 from app.models.game import Game
 from app.models.sportybet_sync_job import SportyBetSyncJob, new_uuid
 from app.services.sportybet_live_client import SportyBetLiveUpstreamError
@@ -346,6 +346,56 @@ def test_two_workers_cannot_claim_same_job(clean_jobs):
 
     assert claimed.count(job_id) == 1
     assert claimed.count(None) == 1
+
+
+def test_upstream_fetch_runs_without_checked_out_database_connection(clean_jobs):
+    db = SessionLocal()
+    try:
+        job, _ = enqueue_live_sync_job(db)
+        db.commit()
+        job_id = job.id
+    finally:
+        db.close()
+
+    checked_out_during_fetch: list[int] = []
+
+    def fetch():
+        checked_out_during_fetch.append(engine.pool.checkedout())
+        return {"data": []}
+
+    execute_live_sync_job(job_id, fetch=fetch)
+
+    assert checked_out_during_fetch == [0]
+
+
+def test_running_job_cannot_be_executed_by_second_worker(clean_jobs):
+    db = SessionLocal()
+    try:
+        job, _ = enqueue_live_sync_job(db)
+        db.commit()
+        job_id = job.id
+    finally:
+        db.close()
+
+    db = SessionLocal()
+    try:
+        claimed = claim_next_live_sync_job(db)
+        assert claimed is not None
+        assert claimed.id == job_id
+    finally:
+        db.close()
+
+    fetch_called = False
+
+    def fetch():
+        nonlocal fetch_called
+        fetch_called = True
+        return {"data": []}
+
+    result = execute_live_sync_job(job_id, fetch=fetch)
+
+    assert result.status == "running"
+    assert fetch_called is False
 
 
 def test_post_does_not_call_important_events(client, monkeypatch, clean_jobs):
