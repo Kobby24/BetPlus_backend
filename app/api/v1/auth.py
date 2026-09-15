@@ -1,9 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
-from app.core.security import create_access_token, get_password_hash, verify_password
+from app.core.config import get_settings
+from app.core.security import (
+    create_access_token,
+    get_password_hash,
+    verify_and_update_password,
+    verify_password,
+)
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas import (
@@ -21,7 +27,9 @@ router = APIRouter()
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 def register(payload: UserRegister, request: Request, db: Session = Depends(get_db)):
-    enforce_rate_limit(bucket=f"register:{client_ip(request)}", limit=10, window_seconds=60)
+    enforce_rate_limit(
+        bucket=f"register:{client_ip(request)}", limit=10, window_seconds=60
+    )
     email = payload.email.strip().lower()
     if db.query(User).filter(User.email == email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -62,23 +70,60 @@ def register(payload: UserRegister, request: Request, db: Session = Depends(get_
 @router.post("/login", response_model=Token)
 def login(
     request: Request,
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
-    enforce_rate_limit(bucket=f"login:{client_ip(request)}", limit=10, window_seconds=60)
+    enforce_rate_limit(
+        bucket=f"login:{client_ip(request)}", limit=10, window_seconds=60
+    )
     identifier = form_data.username.strip()
     user = (
         db.query(User)
         .filter((User.email == identifier.lower()) | (User.phone == identifier))
         .first()
     )
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
         )
+    valid, upgraded_hash = verify_and_update_password(
+        form_data.password, user.hashed_password
+    )
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+        )
+    if upgraded_hash:
+        user.hashed_password = upgraded_hash
+        db.add(user)
+        db.commit()
     token = create_access_token({"sub": user.id})
+    settings = get_settings()
+    response.set_cookie(
+        "betplus_access_token",
+        token,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+        max_age=settings.access_token_expire_minutes * 60,
+        path="/",
+    )
     return {"access_token": token, "token_type": "bearer"}
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(response: Response) -> None:
+    settings = get_settings()
+    response.delete_cookie(
+        "betplus_access_token",
+        path="/",
+        secure=settings.cookie_secure,
+        httponly=True,
+        samesite="lax",
+    )
 
 
 @router.get("/me", response_model=UserOut)
@@ -100,7 +145,11 @@ def update_me(
 
     if payload.email is not None:
         email = payload.email.strip().lower()
-        existing = db.query(User).filter(User.email == email, User.id != current_user.id).first()
+        existing = (
+            db.query(User)
+            .filter(User.email == email, User.id != current_user.id)
+            .first()
+        )
         if existing:
             raise HTTPException(status_code=400, detail="Email already registered")
         current_user.email = email

@@ -27,6 +27,7 @@ APP_TABLES = frozenset(
         "idempotency_keys",
         "rate_limit_hits",
         "sportybet_sync_jobs",
+        "payment_webhook_events",
     }
 )
 

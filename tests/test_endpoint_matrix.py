@@ -1,6 +1,11 @@
 """Direct tests for every public FastAPI route surface."""
 
-from tests.helpers import auth_headers, ensure_open_game, promote_user, register_and_token
+from tests.helpers import (
+    auth_headers,
+    ensure_open_game,
+    promote_user,
+    register_and_token,
+)
 
 
 def _seed_wallet(client, token, amount=100):
@@ -78,6 +83,7 @@ def test_bets_lookup_errors_and_simple_place(client):
     token = register_and_token(client, "bet-matrix@example.com")
     _seed_wallet(client, token)
     ensure_open_game("m1", odds_home=2.0)
+    client.cookies.clear()
 
     unauthorized = client.post(
         "/api/v1/bets/place",
@@ -112,6 +118,7 @@ def test_bets_lookup_errors_and_simple_place(client):
                     "league": "EPL",
                 }
             ],
+            "accept_odds_change": True,
         },
         headers=auth_headers(token),
     )
@@ -137,10 +144,19 @@ def test_admin_and_manager_remaining_routes(client):
     mgr_token = register_and_token(client, "matrix-mgr@example.com")
     promote_user("matrix-admin@example.com", is_admin=True)
     promote_user("matrix-mgr@example.com", is_manager=True)
-    user_id = client.get("/api/v1/auth/me", headers=auth_headers(user_token)).json()["id"]
+    user_id = client.get("/api/v1/auth/me", headers=auth_headers(user_token)).json()[
+        "id"
+    ]
 
-    assert client.get("/api/v1/admin/users/missing", headers=auth_headers(admin_token)).status_code == 404
-    user = client.get(f"/api/v1/admin/users/{user_id}", headers=auth_headers(admin_token))
+    assert (
+        client.get(
+            "/api/v1/admin/users/missing", headers=auth_headers(admin_token)
+        ).status_code
+        == 404
+    )
+    user = client.get(
+        f"/api/v1/admin/users/{user_id}", headers=auth_headers(admin_token)
+    )
     assert user.status_code == 200
 
     txs = client.get(
@@ -153,12 +169,26 @@ def test_admin_and_manager_remaining_routes(client):
         headers=auth_headers(admin_token),
     )
     assert bets.status_code == 200
-    assert client.get("/api/v1/admin/bets", headers=auth_headers(admin_token)).status_code == 200
-    assert client.get("/api/v1/admin/audit", headers=auth_headers(admin_token)).status_code == 200
-    assert client.get("/api/v1/admin/referrals", headers=auth_headers(admin_token)).status_code == 200
-    assert client.get(
-        "/api/v1/admin/referrals/missing", headers=auth_headers(admin_token)
-    ).status_code == 404
+    assert (
+        client.get("/api/v1/admin/bets", headers=auth_headers(admin_token)).status_code
+        == 200
+    )
+    assert (
+        client.get("/api/v1/admin/audit", headers=auth_headers(admin_token)).status_code
+        == 200
+    )
+    assert (
+        client.get(
+            "/api/v1/admin/referrals", headers=auth_headers(admin_token)
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get(
+            "/api/v1/admin/referrals/missing", headers=auth_headers(admin_token)
+        ).status_code
+        == 404
+    )
 
     created = client.post(
         "/api/v1/manager/matches",
@@ -167,30 +197,56 @@ def test_admin_and_manager_remaining_routes(client):
     )
     assert created.status_code == 201
     match_id = created.json()["match_id"]
-    assert client.post(
-        f"/api/v1/manager/matches/{match_id}/control",
-        headers=auth_headers(mgr_token),
-    ).status_code == 200
-    assert client.delete(
-        f"/api/v1/manager/matches/{match_id}/control",
-        headers=auth_headers(mgr_token),
-    ).status_code == 400
-    assert client.get("/api/v1/manager/audit", headers=auth_headers(mgr_token)).status_code == 200
+    assert (
+        client.post(
+            f"/api/v1/manager/matches/{match_id}/control",
+            headers=auth_headers(mgr_token),
+        ).status_code
+        == 200
+    )
+    assert (
+        client.delete(
+            f"/api/v1/manager/matches/{match_id}/control",
+            headers=auth_headers(mgr_token),
+        ).status_code
+        == 400
+    )
+    assert (
+        client.get("/api/v1/manager/audit", headers=auth_headers(mgr_token)).status_code
+        == 200
+    )
     deleted = client.delete(
         f"/api/v1/manager/matches/{match_id}",
         headers=auth_headers(mgr_token),
     )
     assert deleted.status_code == 200
 
-    assert client.get("/api/v1/manager/matches", headers=auth_headers(user_token)).status_code == 403
-    assert client.get("/api/v1/admin/stats", headers=auth_headers(user_token)).status_code == 403
-    assert client.get("/api/v1/admin/bets/missing", headers=auth_headers(admin_token)).status_code == 404
+    assert (
+        client.get(
+            "/api/v1/manager/matches", headers=auth_headers(user_token)
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get("/api/v1/admin/stats", headers=auth_headers(user_token)).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/api/v1/admin/bets/missing", headers=auth_headers(admin_token)
+        ).status_code
+        == 404
+    )
 
 
 def test_legacy_auth_alias(client):
     resp = client.post(
         "/api/auth/register",
-        json={"name": "Legacy", "email": "legacy-alias@example.com", "password": "secret1"},
+        json={
+            "name": "Legacy",
+            "email": "legacy-alias@example.com",
+            "password": "secret1",
+        },
     )
     assert resp.status_code == 201
     login = client.post(

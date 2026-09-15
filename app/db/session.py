@@ -6,6 +6,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import get_settings, reset_settings_cache
 from app.db.base import Base
 
+POSTGRES_POOL_SIZE = 3
+POSTGRES_MAX_OVERFLOW = 2
+POSTGRES_POOL_TIMEOUT = 30
+POSTGRES_POOL_RECYCLE = 1800
+
 
 def _build_engine():
     settings = get_settings()
@@ -15,10 +20,10 @@ def _build_engine():
     kwargs: dict = {}
     if not is_sqlite:
         kwargs["pool_pre_ping"] = True
-        kwargs["pool_recycle"] = 1800
-        kwargs["pool_timeout"] = 30
-        kwargs["pool_size"] = 3
-        kwargs["max_overflow"] = 2
+        kwargs["pool_recycle"] = POSTGRES_POOL_RECYCLE
+        kwargs["pool_timeout"] = POSTGRES_POOL_TIMEOUT
+        kwargs["pool_size"] = POSTGRES_POOL_SIZE
+        kwargs["max_overflow"] = POSTGRES_MAX_OVERFLOW
     return create_engine(url, connect_args=connect_args, **kwargs)
 
 

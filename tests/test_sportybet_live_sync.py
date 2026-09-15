@@ -34,7 +34,9 @@ from app.services.sportybet_live_parser import (
 from app.services.sportybet_live_sync import sync_sportybet_live_games
 from tests.helpers import auth_headers, register_and_token
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "sportybet_live_or_prematch_events.json"
+FIXTURE_PATH = (
+    Path(__file__).parent / "fixtures" / "sportybet_live_or_prematch_events.json"
+)
 PREMATCH_EVENT_ID = "sr:match:80000001"
 PREMATCH_GAME_ID = "55001"
 PREMATCH_PUBLIC_ID = public_live_match_id(PREMATCH_EVENT_ID, PREMATCH_GAME_ID)
@@ -140,9 +142,7 @@ def _payload_with_event(**overrides) -> dict:
 
 def test_parse_live_event_requires_identifiers():
     with pytest.raises(InvalidSportyBetLiveEvent, match="eventId"):
-        parse_live_event(
-            {"gameId": "55001", "homeTeamName": "A", "awayTeamName": "B"}
-        )
+        parse_live_event({"gameId": "55001", "homeTeamName": "A", "awayTeamName": "B"})
     with pytest.raises(InvalidSportyBetLiveEvent, match="gameId"):
         parse_live_event(
             {"eventId": "sr:match:1", "homeTeamName": "A", "awayTeamName": "B"}
@@ -215,9 +215,7 @@ def test_live_client_http_failure_and_invalid_json():
     dummy_500 = DummyAsyncClient(DummyResponse(503, text="nope"))
     with pytest.raises(SportyBetLiveUpstreamError, match="HTTP 503"):
         asyncio.run(
-            fetch_live_or_prematch_events(
-                settings=_live_settings(), client=dummy_500
-            )
+            fetch_live_or_prematch_events(settings=_live_settings(), client=dummy_500)
         )
 
     dummy_json = DummyAsyncClient(
@@ -225,9 +223,7 @@ def test_live_client_http_failure_and_invalid_json():
     )
     with pytest.raises(SportyBetLiveUpstreamError, match="invalid JSON"):
         asyncio.run(
-            fetch_live_or_prematch_events(
-                settings=_live_settings(), client=dummy_json
-            )
+            fetch_live_or_prematch_events(settings=_live_settings(), client=dummy_json)
         )
 
 
@@ -506,6 +502,7 @@ def test_finished_game_settlement_compatibility(client, clean_imported_games):
                     "market_id": "1x2",
                 }
             ],
+            "accept_odds_change": True,
         },
         headers=auth_headers(user_token),
     )

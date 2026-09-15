@@ -125,3 +125,18 @@ class IdempotencyService:
                     response_body=body,
                 )
             )
+
+    @staticmethod
+    def clear_in_progress(
+        db: Session, *, user_id: str, key: str | None
+    ) -> None:
+        if not key:
+            return
+        normalized = key.strip()[:128]
+        if not normalized:
+            return
+        db.query(IdempotencyKey).filter(
+            IdempotencyKey.user_id == user_id,
+            IdempotencyKey.key_value == normalized,
+            IdempotencyKey.status_code == 0,
+        ).delete(synchronize_session=False)

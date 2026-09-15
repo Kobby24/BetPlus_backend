@@ -4,7 +4,12 @@ from app.models.audit import AuditLog
 from app.models.bet import Bet, BetSelection
 from app.models.game import Game
 from app.models.league import League
-from app.models.payment import IdempotencyKey, PaymentIntent, RateLimitHit
+from app.models.payment import (
+    IdempotencyKey,
+    PaymentIntent,
+    PaymentWebhookEvent,
+    RateLimitHit,
+)
 from app.models.platform_ledger import PlatformLedger
 from app.models.referral import ReferralDeposit
 from app.models.sport import Sport
@@ -20,6 +25,7 @@ __all__ = [
     "IdempotencyKey",
     "League",
     "PaymentIntent",
+    "PaymentWebhookEvent",
     "PlatformLedger",
     "RateLimitHit",
     "ReferralDeposit",

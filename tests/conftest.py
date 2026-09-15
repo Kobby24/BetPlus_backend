@@ -42,3 +42,15 @@ def client():
 
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture(autouse=True)
+def clear_auth_cookies(client):
+    yield
+    client.cookies.clear()
+
+
+@pytest.fixture(autouse=True)
+def reset_cached_settings():
+    yield
+    reset_settings_cache()

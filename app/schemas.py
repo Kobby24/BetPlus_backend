@@ -8,7 +8,7 @@ class UserRegister(BaseModel):
     name: str | None = Field(default=None, max_length=255)
     email: EmailStr
     phone: str | None = Field(default=None, max_length=32)
-    password: str = Field(min_length=6)
+    password: str = Field(min_length=6, max_length=256)
     referral_code: str | None = None
 
 
@@ -183,6 +183,18 @@ class BetPlaceIn(BaseModel):
     stake: float = Field(gt=0)
     selections: list[BetSelectionIn] = Field(min_length=1)
     flex_cut: int | None = Field(default=None, ge=0)
+    accept_odds_change: bool = False
+
+
+class BetBatchItemIn(BaseModel):
+    stake: float = Field(gt=0)
+    selections: list[BetSelectionIn] = Field(min_length=1)
+    flex_cut: int | None = Field(default=None, ge=0)
+
+
+class BetBatchPlaceIn(BaseModel):
+    bets: list[BetBatchItemIn] = Field(min_length=1, max_length=20)
+    accept_odds_change: bool = False
 
 
 class BetOut(BaseModel):

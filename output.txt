@@ -1,0 +1,398 @@
+EEEE                                                                     [100%]
+=================================== ERRORS ====================================
+______________ ERROR at setup of test_complete_simulated_cashout ______________
+
+fixturedef = <FixtureDef argname='client' scope='module' baseid='tests'>
+request = <SubRequest 'client' for <Function test_complete_simulated_cashout>>
+
+    @pytest.hookimpl(wrapper=True)
+    def pytest_fixture_setup(fixturedef: FixtureDef, request) -> object | None:
+        if (
+            fixturedef.argname == "event_loop_policy"
+            and fixturedef.func.__module__ != __name__
+        ):
+            warnings.warn(
+                PytestDeprecationWarning(_EVENT_LOOP_POLICY_FIXTURE_DEPRECATION_WARNING),
+            )
+        asyncio_mode = _get_asyncio_mode(request.config)
+        if not _is_asyncio_fixture_function(fixturedef.func):
+            if asyncio_mode == Mode.STRICT:
+                # Ignore async fixtures without explicit asyncio mark in strict mode
+                # This applies to pytest_trio fixtures, for example
+                return (yield)
+            if not _is_coroutine_or_asyncgen(fixturedef.func):
+>               return (yield)
+                        ^^^^^
+
+.venv\Lib\site-packages\pytest_asyncio\plugin.py:926: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\conftest.py:41: in client
+    from app.main import app
+app\main.py:9: in <module>
+    from app.api.v1.router import router as v1_router
+app\api\v1\router.py:4: in <module>
+    from app.api.v1 import admin, auth, bets, cashout, catalog, intent, manager, payments, wallet
+app\api\v1\cashout.py:8: in <module>
+    from app.core.dependencies import get_current_user
+app\core\dependencies.py:8: in <module>
+    from app.db.models.user import User
+app\db\models\__init__.py:1: in <module>
+    from app.db.models.user import User
+app\db\models\user.py:8: in <module>
+    class User(Base):
+.venv\Lib\site-packages\sqlalchemy\orm\decl_api.py:200: in __init__
+    _as_declarative(reg, cls, dict_)
+.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py:245: in _as_declarative
+    return _MapperConfig.setup_mapping(registry, cls, dict_, None, {})
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py:326: in setup_mapping
+    return _ClassScanMapperConfig(
+.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py:577: in __init__
+    self._setup_table(table)
+.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py:1762: in _setup_table
+    table_cls(
+.venv\Lib\site-packages\sqlalchemy\util\deprecations.py:281: in warned
+    return fn(*args, **kwargs)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\sql\schema.py:430: in __new__
+    return cls._new(*args, **kw)
+           ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+cls = <class 'sqlalchemy.sql.schema.Table'>
+args = (Column('id', Uuid(), table=None, primary_key=True, nullable=False, default=CallableColumnDefault(<function uuid4 at 0...ullable=False, default=ScalarElementColumnDefault('tw')), Column('accessibility_preferences', Text(), table=None), ...)
+kw = {}, name = 'users', metadata = MetaData(), schema = None
+keep_existing = False, extend_existing = False, must_exist = False
+key = 'users'
+
+    @classmethod
+    def _new(cls, *args: Any, **kw: Any) -> Any:
+        if not args and not kw:
+            # python3k pickle seems to call this
+            return object.__new__(cls)
+    
+        try:
+            name, metadata, args = args[0], args[1], args[2:]
+        except IndexError:
+            raise TypeError(
+                "Table() takes at least two positional-only "
+                "arguments 'name' and 'metadata'"
+            )
+    
+        schema = kw.get("schema", None)
+        if schema is None:
+            schema = metadata.schema
+        elif schema is BLANK_SCHEMA:
+            schema = None
+        keep_existing = kw.get("keep_existing", False)
+        extend_existing = kw.get("extend_existing", False)
+    
+        if keep_existing and extend_existing:
+            msg = "keep_existing and extend_existing are mutually exclusive."
+            raise exc.ArgumentError(msg)
+    
+        must_exist = kw.pop("must_exist", kw.pop("mustexist", False))
+        key = _get_table_key(name, schema)
+        if key in metadata.tables:
+            if not keep_existing and not extend_existing and bool(args):
+>               raise exc.InvalidRequestError(
+                    f"Table '{key}' is already defined for this MetaData "
+                    "instance.  Specify 'extend_existing=True' "
+                    "to redefine "
+                    "options and columns on an "
+                    "existing Table object."
+                )
+E               sqlalchemy.exc.InvalidRequestError: Table 'users' is already defined for this MetaData instance.  Specify 'extend_existing=True' to redefine options and columns on an existing Table object.
+
+.venv\Lib\site-packages\sqlalchemy\sql\schema.py:462: InvalidRequestError
+______________ ERROR at setup of test_ownership_and_confirmation ______________
+
+    @pytest.fixture(scope="module")
+    def client():
+>       from app.main import app
+
+tests\conftest.py:41: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+app\main.py:9: in <module>
+    from app.api.v1.router import router as v1_router
+app\api\v1\router.py:4: in <module>
+    from app.api.v1 import admin, auth, bets, cashout, catalog, intent, manager, payments, wallet
+app\api\v1\cashout.py:8: in <module>
+    from app.core.dependencies import get_current_user
+app\core\dependencies.py:8: in <module>
+    from app.db.models.user import User
+app\db\models\__init__.py:1: in <module>
+    from app.db.models.user import User
+app\db\models\user.py:8: in <module>
+    class User(Base):
+.venv\Lib\site-packages\sqlalchemy\orm\decl_api.py:200: in __init__
+    _as_declarative(reg, cls, dict_)
+.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py:245: in _as_declarative
+    return _MapperConfig.setup_mapping(registry, cls, dict_, None, {})
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py:326: in setup_mapping
+    return _ClassScanMapperConfig(
+.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py:577: in __init__
+    self._setup_table(table)
+.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py:1762: in _setup_table
+    table_cls(
+.venv\Lib\site-packages\sqlalchemy\util\deprecations.py:281: in warned
+    return fn(*args, **kwargs)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\sql\schema.py:430: in __new__
+    return cls._new(*args, **kw)
+           ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+cls = <class 'sqlalchemy.sql.schema.Table'>
+args = (Column('id', Uuid(), table=None, primary_key=True, nullable=False, default=CallableColumnDefault(<function uuid4 at 0...ullable=False, default=ScalarElementColumnDefault('tw')), Column('accessibility_preferences', Text(), table=None), ...)
+kw = {}, name = 'users', metadata = MetaData(), schema = None
+keep_existing = False, extend_existing = False, must_exist = False
+key = 'users'
+
+    @classmethod
+    def _new(cls, *args: Any, **kw: Any) -> Any:
+        if not args and not kw:
+            # python3k pickle seems to call this
+            return object.__new__(cls)
+    
+        try:
+            name, metadata, args = args[0], args[1], args[2:]
+        except IndexError:
+            raise TypeError(
+                "Table() takes at least two positional-only "
+                "arguments 'name' and 'metadata'"
+            )
+    
+        schema = kw.get("schema", None)
+        if schema is None:
+            schema = metadata.schema
+        elif schema is BLANK_SCHEMA:
+            schema = None
+        keep_existing = kw.get("keep_existing", False)
+        extend_existing = kw.get("extend_existing", False)
+    
+        if keep_existing and extend_existing:
+            msg = "keep_existing and extend_existing are mutually exclusive."
+            raise exc.ArgumentError(msg)
+    
+        must_exist = kw.pop("must_exist", kw.pop("mustexist", False))
+        key = _get_table_key(name, schema)
+        if key in metadata.tables:
+            if not keep_existing and not extend_existing and bool(args):
+>               raise exc.InvalidRequestError(
+                    f"Table '{key}' is already defined for this MetaData "
+                    "instance.  Specify 'extend_existing=True' "
+                    "to redefine "
+                    "options and columns on an "
+                    "existing Table object."
+                )
+E               sqlalchemy.exc.InvalidRequestError: Table 'users' is already defined for this MetaData instance.  Specify 'extend_existing=True' to redefine options and columns on an existing Table object.
+
+.venv\Lib\site-packages\sqlalchemy\sql\schema.py:462: InvalidRequestError
+_______________ ERROR at setup of test_pin_payload_is_rejected ________________
+
+    @pytest.fixture(scope="module")
+    def client():
+>       from app.main import app
+
+tests\conftest.py:41: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+app\main.py:9: in <module>
+    from app.api.v1.router import router as v1_router
+app\api\v1\router.py:4: in <module>
+    from app.api.v1 import admin, auth, bets, cashout, catalog, intent, manager, payments, wallet
+app\api\v1\cashout.py:8: in <module>
+    from app.core.dependencies import get_current_user
+app\core\dependencies.py:8: in <module>
+    from app.db.models.user import User
+app\db\models\__init__.py:1: in <module>
+    from app.db.models.user import User
+app\db\models\user.py:8: in <module>
+    class User(Base):
+.venv\Lib\site-packages\sqlalchemy\orm\decl_api.py:200: in __init__
+    _as_declarative(reg, cls, dict_)
+.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py:245: in _as_declarative
+    return _MapperConfig.setup_mapping(registry, cls, dict_, None, {})
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py:326: in setup_mapping
+    return _ClassScanMapperConfig(
+.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py:577: in __init__
+    self._setup_table(table)
+.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py:1762: in _setup_table
+    table_cls(
+.venv\Lib\site-packages\sqlalchemy\util\deprecations.py:281: in warned
+    return fn(*args, **kwargs)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\sql\schema.py:430: in __new__
+    return cls._new(*args, **kw)
+           ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+cls = <class 'sqlalchemy.sql.schema.Table'>
+args = (Column('id', Uuid(), table=None, primary_key=True, nullable=False, default=CallableColumnDefault(<function uuid4 at 0...ullable=False, default=ScalarElementColumnDefault('tw')), Column('accessibility_preferences', Text(), table=None), ...)
+kw = {}, name = 'users', metadata = MetaData(), schema = None
+keep_existing = False, extend_existing = False, must_exist = False
+key = 'users'
+
+    @classmethod
+    def _new(cls, *args: Any, **kw: Any) -> Any:
+        if not args and not kw:
+            # python3k pickle seems to call this
+            return object.__new__(cls)
+    
+        try:
+            name, metadata, args = args[0], args[1], args[2:]
+        except IndexError:
+            raise TypeError(
+                "Table() takes at least two positional-only "
+                "arguments 'name' and 'metadata'"
+            )
+    
+        schema = kw.get("schema", None)
+        if schema is None:
+            schema = metadata.schema
+        elif schema is BLANK_SCHEMA:
+            schema = None
+        keep_existing = kw.get("keep_existing", False)
+        extend_existing = kw.get("extend_existing", False)
+    
+        if keep_existing and extend_existing:
+            msg = "keep_existing and extend_existing are mutually exclusive."
+            raise exc.ArgumentError(msg)
+    
+        must_exist = kw.pop("must_exist", kw.pop("mustexist", False))
+        key = _get_table_key(name, schema)
+        if key in metadata.tables:
+            if not keep_existing and not extend_existing and bool(args):
+>               raise exc.InvalidRequestError(
+                    f"Table '{key}' is already defined for this MetaData "
+                    "instance.  Specify 'extend_existing=True' "
+                    "to redefine "
+                    "options and columns on an "
+                    "existing Table object."
+                )
+E               sqlalchemy.exc.InvalidRequestError: Table 'users' is already defined for this MetaData instance.  Specify 'extend_existing=True' to redefine options and columns on an existing Table object.
+
+.venv\Lib\site-packages\sqlalchemy\sql\schema.py:462: InvalidRequestError
+________ ERROR at setup of test_unclear_intent_requires_clarification _________
+
+fixturedef = <FixtureDef argname='client' scope='module' baseid='tests'>
+request = <SubRequest 'client' for <Function test_unclear_intent_requires_clarification>>
+
+    @pytest.hookimpl(wrapper=True)
+    def pytest_fixture_setup(fixturedef: FixtureDef, request) -> object | None:
+        if (
+            fixturedef.argname == "event_loop_policy"
+            and fixturedef.func.__module__ != __name__
+        ):
+            warnings.warn(
+                PytestDeprecationWarning(_EVENT_LOOP_POLICY_FIXTURE_DEPRECATION_WARNING),
+            )
+        asyncio_mode = _get_asyncio_mode(request.config)
+        if not _is_asyncio_fixture_function(fixturedef.func):
+            if asyncio_mode == Mode.STRICT:
+                # Ignore async fixtures without explicit asyncio mark in strict mode
+                # This applies to pytest_trio fixtures, for example
+                return (yield)
+            if not _is_coroutine_or_asyncgen(fixturedef.func):
+>               return (yield)
+                        ^^^^^
+
+.venv\Lib\site-packages\pytest_asyncio\plugin.py:926: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\conftest.py:41: in client
+    from app.main import app
+app\main.py:9: in <module>
+    from app.api.v1.router import router as v1_router
+app\api\v1\router.py:4: in <module>
+    from app.api.v1 import admin, auth, bets, cashout, catalog, intent, manager, payments, wallet
+app\api\v1\cashout.py:8: in <module>
+    from app.core.dependencies import get_current_user
+app\core\dependencies.py:8: in <module>
+    from app.db.models.user import User
+app\db\models\__init__.py:1: in <module>
+    from app.db.models.user import User
+app\db\models\user.py:8: in <module>
+    class User(Base):
+.venv\Lib\site-packages\sqlalchemy\orm\decl_api.py:200: in __init__
+    _as_declarative(reg, cls, dict_)
+.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py:245: in _as_declarative
+    return _MapperConfig.setup_mapping(registry, cls, dict_, None, {})
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py:326: in setup_mapping
+    return _ClassScanMapperConfig(
+.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py:577: in __init__
+    self._setup_table(table)
+.venv\Lib\site-packages\sqlalchemy\orm\decl_base.py:1762: in _setup_table
+    table_cls(
+.venv\Lib\site-packages\sqlalchemy\util\deprecations.py:281: in warned
+    return fn(*args, **kwargs)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\sql\schema.py:430: in __new__
+    return cls._new(*args, **kw)
+           ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+cls = <class 'sqlalchemy.sql.schema.Table'>
+args = (Column('id', Uuid(), table=None, primary_key=True, nullable=False, default=CallableColumnDefault(<function uuid4 at 0...ullable=False, default=ScalarElementColumnDefault('tw')), Column('accessibility_preferences', Text(), table=None), ...)
+kw = {}, name = 'users', metadata = MetaData(), schema = None
+keep_existing = False, extend_existing = False, must_exist = False
+key = 'users'
+
+    @classmethod
+    def _new(cls, *args: Any, **kw: Any) -> Any:
+        if not args and not kw:
+            # python3k pickle seems to call this
+            return object.__new__(cls)
+    
+        try:
+            name, metadata, args = args[0], args[1], args[2:]
+        except IndexError:
+            raise TypeError(
+                "Table() takes at least two positional-only "
+                "arguments 'name' and 'metadata'"
+            )
+    
+        schema = kw.get("schema", None)
+        if schema is None:
+            schema = metadata.schema
+        elif schema is BLANK_SCHEMA:
+            schema = None
+        keep_existing = kw.get("keep_existing", False)
+        extend_existing = kw.get("extend_existing", False)
+    
+        if keep_existing and extend_existing:
+            msg = "keep_existing and extend_existing are mutually exclusive."
+            raise exc.ArgumentError(msg)
+    
+        must_exist = kw.pop("must_exist", kw.pop("mustexist", False))
+        key = _get_table_key(name, schema)
+        if key in metadata.tables:
+            if not keep_existing and not extend_existing and bool(args):
+>               raise exc.InvalidRequestError(
+                    f"Table '{key}' is already defined for this MetaData "
+                    "instance.  Specify 'extend_existing=True' "
+                    "to redefine "
+                    "options and columns on an "
+                    "existing Table object."
+                )
+E               sqlalchemy.exc.InvalidRequestError: Table 'users' is already defined for this MetaData instance.  Specify 'extend_existing=True' to redefine options and columns on an existing Table object.
+
+.venv\Lib\site-packages\sqlalchemy\sql\schema.py:462: InvalidRequestError
+============================== warnings summary ===============================
+.venv\Lib\site-packages\fastapi\testclient.py:1
+  C:\Users\USER\BetPlus\backend\.venv\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+tests/test_intent.py::test_unclear_intent_requires_clarification
+  C:\Users\USER\BetPlus\backend\app\db\models\user.py:8: SAWarning: This declarative base already contains a class with the same class name and module name as app.db.models.user.User, and will be replaced in the string-lookup table.
+    class User(Base):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+ERROR tests/test_cashout.py::test_complete_simulated_cashout - sqlalchemy.exc...
+ERROR tests/test_cashout.py::test_ownership_and_confirmation - sqlalchemy.exc...
+ERROR tests/test_cashout.py::test_pin_payload_is_rejected - sqlalchemy.exc.In...
+ERROR tests/test_intent.py::test_unclear_intent_requires_clarification - sqla...
+2 warnings, 4 errors in 3.73s

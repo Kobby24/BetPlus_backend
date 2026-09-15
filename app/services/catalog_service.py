@@ -13,7 +13,9 @@ from app.models.game import Game
 from app.models.league import League
 from app.models.sport import Sport
 
-CLOSED_STATUSES = frozenset({"finished", "ft", "completed", "cancelled", "void"})
+CLOSED_STATUSES = frozenset(
+    {"finished", "ft", "completed", "cancelled", "void", "suspended"}
+)
 
 
 def _norm(value: str | None) -> str:
@@ -127,6 +129,8 @@ def price_selection(db: Session, *, match_id: str, selection: str, selection_lab
         raise ValueError("Unknown match")
     status = (game.status or "").lower()
     if status in CLOSED_STATUSES:
+        if status == "suspended":
+            raise ValueError("Match is suspended")
         raise ValueError("Match is closed for betting")
 
     markets = default_markets_for_game(game)
@@ -168,6 +172,8 @@ def price_selection(db: Session, *, match_id: str, selection: str, selection_lab
 
     if outcome is None:
         raise ValueError("Unknown selection for this market")
+    if outcome.get("suspended") or outcome.get("active") is False:
+        raise ValueError("Selection is suspended")
 
     odds = to_decimal(outcome.get("odds"))
     if odds <= 0:

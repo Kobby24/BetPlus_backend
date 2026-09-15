@@ -42,18 +42,28 @@ if settings.cors_origin_list:
         allow_origins=settings.cors_origin_list,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Webhook-Signature", "X-Paystack-Signature"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Idempotency-Key",
+            "X-Request-ID",
+        ],
     )
 
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
+    request_id = request.headers.get("x-request-id") or request.headers.get(
+        "x-amzn-trace-id"
+    )
     logger.info("%s %s", request.method, request.url.path)
     try:
         response: Response = await call_next(request)
     except Exception:
         logger.exception("Unhandled error on %s %s", request.method, request.url.path)
         raise
+    if request_id:
+        response.headers.setdefault("X-Request-ID", request_id)
     if response.status_code >= 400:
         logger.warning(
             "%s %s -> %s", request.method, request.url.path, response.status_code

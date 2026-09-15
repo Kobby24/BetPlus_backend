@@ -28,9 +28,27 @@ class PaymentIntent(Base):
     status = Column(String(16), nullable=False, default="pending", index=True)
     channel = Column(String(32), nullable=True)
     authorization_url = Column(String(512), nullable=True)
+    provider_txn_id = Column(String(64), nullable=True, index=True)
     extra = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class PaymentWebhookEvent(Base):
+    """Durable Moolre callback idempotency (transactionid / event key)."""
+
+    __tablename__ = "payment_webhook_events"
+    __table_args__ = (
+        UniqueConstraint("provider", "event_key", name="uq_payment_webhook_event"),
+    )
+
+    id = Column(String(36), primary_key=True, default=new_uuid)
+    provider = Column(String(32), nullable=False, index=True)
+    event_key = Column(String(128), nullable=False)
+    payment_intent_id = Column(
+        String(36), ForeignKey("payment_intents.id"), nullable=True, index=True
+    )
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 class IdempotencyKey(Base):

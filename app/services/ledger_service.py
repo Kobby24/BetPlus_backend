@@ -7,7 +7,9 @@ from app.models.platform_ledger import PlatformLedger
 from app.models.user import User
 
 # Types that move house cash. Matches the previous frontend platform-store rules.
-CASH_TYPES = frozenset({"deposit", "withdraw", "admin_credit", "payout"})
+CASH_TYPES = frozenset(
+    {"deposit", "withdraw", "admin_credit", "payout", "withdraw_reversal"}
+)
 
 
 class LedgerService:

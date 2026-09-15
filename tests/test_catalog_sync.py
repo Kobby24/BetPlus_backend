@@ -180,16 +180,24 @@ def _client_settings():
 def test_client_http_errors_and_invalid_json():
     dummy_500 = DummyAsyncClient(DummyResponse(503, text="nope"))
     with pytest.raises(SportyBetUpstreamError, match="HTTP 503"):
-        asyncio.run(fetch_important_events(settings=_client_settings(), client=dummy_500))
+        asyncio.run(
+            fetch_important_events(settings=_client_settings(), client=dummy_500)
+        )
 
     dummy_400 = DummyAsyncClient(DummyResponse(403, text="denied"))
     with pytest.raises(SportyBetUpstreamError, match="HTTP 403"):
-        asyncio.run(fetch_important_events(settings=_client_settings(), client=dummy_400))
+        asyncio.run(
+            fetch_important_events(settings=_client_settings(), client=dummy_400)
+        )
     assert dummy_400.calls == 1
 
-    dummy_json = DummyAsyncClient(DummyResponse(200, payload=None, text="<html>challenge</html>"))
+    dummy_json = DummyAsyncClient(
+        DummyResponse(200, payload=None, text="<html>challenge</html>")
+    )
     with pytest.raises(SportyBetUpstreamError, match="invalid JSON") as exc:
-        asyncio.run(fetch_important_events(settings=_client_settings(), client=dummy_json))
+        asyncio.run(
+            fetch_important_events(settings=_client_settings(), client=dummy_json)
+        )
     assert "text/html" in exc.value.message
     assert "challenge" in exc.value.message
 
@@ -222,12 +230,12 @@ def test_successful_import_and_catalog_shape(clean_imported_games):
         market_ids = {m["id"] for m in (game.markets or [])}
         assert "1x2" in market_ids
         assert "ou25" in market_ids
-        assert not any("Correct Score" in (m.get("name") or "") for m in game.markets or [])
+        assert not any(
+            "Correct Score" in (m.get("name") or "") for m in game.markets or []
+        )
 
         live = (
-            db.query(Game)
-            .filter(Game.external_event_id == "sr:match:73761145")
-            .one()
+            db.query(Game).filter(Game.external_event_id == "sr:match:73761145").one()
         )
         assert live.status == "live"
         assert live.is_live == 1
@@ -300,9 +308,7 @@ def test_idempotent_second_sync_creates_zero(clean_imported_games):
         assert second["skipped_existing"] + second["updated"] >= first["created"]
         assert _count_example_games() == 1
         assert (
-            db.query(Game)
-            .filter(Game.external_event_id.isnot(None))
-            .count()
+            db.query(Game).filter(Game.external_event_id.isnot(None)).count()
             == db.query(Game.external_event_id, Game.external_game_id)
             .filter(Game.external_event_id.isnot(None))
             .distinct()
@@ -491,7 +497,9 @@ def test_endpoint_upstream_errors(client, monkeypatch):
     assert client.post(SYNC_URL).status_code == 502
 
 
-def test_imported_game_settlement_compatibility(client, monkeypatch, clean_imported_games):
+def test_imported_game_settlement_compatibility(
+    client, monkeypatch, clean_imported_games
+):
     async def fake_fetch(*args, **kwargs):
         return load_fixture()
 
@@ -522,6 +530,7 @@ def test_imported_game_settlement_compatibility(client, monkeypatch, clean_impor
                     "market_id": "1x2",
                 }
             ],
+            "accept_odds_change": True,
         },
         headers=auth_headers(user_token),
     )

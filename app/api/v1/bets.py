@@ -3,8 +3,8 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.schemas import BetCreate, BetOut, BetPlaceIn
-from app.services.bet_service import BetService, SelectionInput
+from app.schemas import BetBatchPlaceIn, BetCreate, BetOut, BetPlaceIn
+from app.services.bet_service import BetService, OddsChangedError, SelectionInput
 from app.services.idempotency_service import IdempotencyService
 from app.services.rate_limit import client_ip, enforce_rate_limit
 from app.services.wallet_service import InsufficientBalanceError
@@ -63,6 +63,7 @@ def place_bet(
             stake=payload.stake,
             selections=selections,
             flex_cut=payload.flex_cut,
+            accept_odds_change=payload.accept_odds_change,
         )
         out = _bet_to_out(bet)
         IdempotencyService.store(
@@ -77,6 +78,12 @@ def place_bet(
         )
         db.commit()
         return out
+    except OddsChangedError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "ODDS_CHANGED", "selections": exc.changes},
+        ) from exc
     except InsufficientBalanceError as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -85,7 +92,82 @@ def place_bet(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/place/simple", response_model=BetOut, status_code=201, include_in_schema=False)
+@router.post("/place/batch", response_model=list[BetOut], status_code=201)
+def place_bet_batch(
+    payload: BetBatchPlaceIn,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    enforce_rate_limit(bucket=f"bet:{current_user.id}", limit=30, window_seconds=60)
+    cached = IdempotencyService.replay_or_begin(
+        db,
+        user_id=current_user.id,
+        key=idempotency_key,
+        method="POST",
+        path="/api/v1/bets/place/batch",
+        payload=payload.model_dump(),
+    )
+    if cached:
+        if not cached.status_code:
+            raise HTTPException(status_code=409, detail="Request already in progress")
+        return cached.response_body
+
+    try:
+        placed = []
+        for item in payload.bets:
+            selections = [
+                SelectionInput(
+                    match_id=s.match_id,
+                    home_team=s.home_team,
+                    away_team=s.away_team,
+                    selection=s.selection,
+                    selection_label=s.selection_label,
+                    odds=s.odds or 1.0,
+                    league=s.league,
+                    market_id=s.market_id,
+                    market_name=s.market_name,
+                )
+                for s in item.selections
+            ]
+            placed.append(
+                BetService.place_bet(
+                    db,
+                    user_id=current_user.id,
+                    stake=item.stake,
+                    selections=selections,
+                    flex_cut=item.flex_cut,
+                    accept_odds_change=payload.accept_odds_change,
+                    commit=False,
+                )
+            )
+        out = [_bet_to_out(bet) for bet in placed]
+        IdempotencyService.store(
+            db,
+            user_id=current_user.id,
+            key=idempotency_key,
+            method="POST",
+            path="/api/v1/bets/place/batch",
+            payload=payload.model_dump(),
+            status_code=201,
+            response_body=[item.model_dump(mode="json") for item in out],
+        )
+        db.commit()
+        return out
+    except OddsChangedError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "ODDS_CHANGED", "selections": exc.changes},
+        ) from exc
+    except (InsufficientBalanceError, ValueError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/place/simple", response_model=BetOut, status_code=201, include_in_schema=False
+)
 def place_simple_bet(
     payload: BetCreate,
     current_user=Depends(get_current_user),
@@ -109,8 +191,12 @@ def my_bets(current_user=Depends(get_current_user), db: Session = Depends(get_db
 
 
 @router.get("/code/{booking_code}", response_model=BetOut)
-def get_by_booking_code(booking_code: str, request: Request, db: Session = Depends(get_db)):
-    enforce_rate_limit(bucket=f"ticket:{client_ip(request)}", limit=60, window_seconds=60)
+def get_by_booking_code(
+    booking_code: str, request: Request, db: Session = Depends(get_db)
+):
+    enforce_rate_limit(
+        bucket=f"ticket:{client_ip(request)}", limit=60, window_seconds=60
+    )
     bet = BetService.get_by_booking_code(db, booking_code)
     if not bet:
         raise HTTPException(status_code=404, detail="Bet not found")
@@ -118,8 +204,12 @@ def get_by_booking_code(booking_code: str, request: Request, db: Session = Depen
 
 
 @router.get("/verify/{verify_code}", response_model=BetOut)
-def get_by_verify_code(verify_code: str, request: Request, db: Session = Depends(get_db)):
-    enforce_rate_limit(bucket=f"verify:{client_ip(request)}", limit=60, window_seconds=60)
+def get_by_verify_code(
+    verify_code: str, request: Request, db: Session = Depends(get_db)
+):
+    enforce_rate_limit(
+        bucket=f"verify:{client_ip(request)}", limit=60, window_seconds=60
+    )
     bet = BetService.get_by_verify_code(db, verify_code)
     if not bet:
         raise HTTPException(status_code=404, detail="Bet not found")

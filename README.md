@@ -25,7 +25,7 @@ Production deploy: see [`DEPLOY.md`](../DEPLOY.md).
 | `ENVIRONMENT` | `development` / `staging` / `production` / `test` |
 | `SEED_DEMO_DATA` | Seed catalog sports/matches (disabled in production unless `ALLOW_DEMO_SEED`) |
 | `SEED_DEMO_USERS` | Seed `admin@betplus.com` / `admin123` — **never in production** |
-| `PAYMENTS_MODE` | `simulated` / `paystack` / `disabled` |
+| `PAYMENTS_MODE` | `simulated` / `moolre` / `disabled` |
 | `RATE_LIMIT_ENABLED` | DB-backed limits for login, register, bets, webhooks |
 | `SPORTYBET_FACTS_URL` | Optional catalog sync URL (defaults to SportyBet Ghana facts-center) |
 | `SPORTYBET_SPORT_ID` | Upstream sport id (default `sr:sport:1` / football) |

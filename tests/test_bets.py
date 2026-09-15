@@ -70,8 +70,22 @@ def test_place_multi_leg_bet(client):
     token = register_and_token(client, "multi@example.com")
     seed_wallet(client, token, 200)
     ensure_open_game("m1", odds_home=2.1)
-    ensure_open_game("m2", home="Liverpool", away="Manchester City", odds_home=2.8, odds_draw=3.5, odds_away=2.45)
-    ensure_open_game("m3", home="Real Madrid", away="Barcelona", odds_home=2.1, odds_draw=3.6, odds_away=2.8)
+    ensure_open_game(
+        "m2",
+        home="Liverpool",
+        away="Manchester City",
+        odds_home=2.8,
+        odds_draw=3.5,
+        odds_away=2.45,
+    )
+    ensure_open_game(
+        "m3",
+        home="Real Madrid",
+        away="Barcelona",
+        odds_home=2.1,
+        odds_draw=3.6,
+        odds_away=2.8,
+    )
     resp = client.post(
         "/api/v1/bets/place",
         json={
@@ -116,6 +130,55 @@ def test_place_multi_leg_bet(client):
     assert abs(bet["total_odds"] - expected_odds) < 0.01
 
 
+def test_single_batch_is_atomic(client):
+    token = register_and_token(client, "single-batch@example.com")
+    seed_wallet(client, token, 15)
+    ensure_open_game("batch-1", odds_home=2.0)
+    ensure_open_game("batch-2", home="Liverpool", away="City", odds_home=2.0)
+
+    resp = client.post(
+        "/api/v1/bets/place/batch",
+        json={
+            "bets": [
+                {
+                    "stake": 10,
+                    "selections": [
+                        {
+                            "match_id": "batch-1",
+                            "home_team": "Arsenal",
+                            "away_team": "Chelsea",
+                            "selection": "home",
+                            "selection_label": "Home",
+                            "odds": 2.0,
+                        }
+                    ],
+                },
+                {
+                    "stake": 10,
+                    "selections": [
+                        {
+                            "match_id": "batch-2",
+                            "home_team": "Liverpool",
+                            "away_team": "City",
+                            "selection": "home",
+                            "selection_label": "Home",
+                            "odds": 2.0,
+                        }
+                    ],
+                },
+            ]
+        },
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 400
+    assert "Insufficient" in resp.json()["detail"]
+    assert client.get("/api/v1/bets/my", headers=auth_headers(token)).json() == []
+    assert (
+        client.get("/api/v1/auth/me", headers=auth_headers(token)).json()["balance"]
+        == 15
+    )
+
+
 def test_place_bet_debits_balance_and_creates_transaction(client):
     token = register_and_token(client, "debit@example.com")
     seed_wallet(client, token, 100)
@@ -148,9 +211,7 @@ def test_place_bet_debits_balance_and_creates_transaction(client):
     me_after = client.get("/api/v1/auth/me", headers=auth_headers(token)).json()
     assert me_after["balance"] == 85
 
-    txs = client.get(
-        "/api/v1/wallet/transactions", headers=auth_headers(token)
-    ).json()
+    txs = client.get("/api/v1/wallet/transactions", headers=auth_headers(token)).json()
     bet_txs = [t for t in txs if t["type"] == "bet"]
     assert len(bet_txs) == 1
     assert bet_txs[0]["amount"] == -15 or bet_txs[0]["amount"] == -15.0
@@ -280,7 +341,7 @@ def test_get_bet_by_verify_code(client):
     assert resp.json()["booking_code"] == placed["booking_code"]
 
 
-def test_client_odds_are_ignored(client):
+def test_client_odds_changes_are_rejected(client):
     token = register_and_token(client, "tamper@example.com")
     seed_wallet(client, token, 100)
     ensure_open_game("m1", odds_home=2.0)
@@ -303,11 +364,9 @@ def test_client_odds_are_ignored(client):
         },
         headers=auth_headers(token),
     )
-    assert resp.status_code == 201
-    bet = resp.json()
-    assert abs(bet["total_odds"] - 2.0) < 0.001
-    assert abs(bet["potential_win"] - 20.0) < 0.001
-    assert abs(bet["selections"][0]["odds"] - 2.0) < 0.001
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "ODDS_CHANGED"
+    assert resp.json()["detail"]["selections"][0]["current_odds"] == 2.0
 
 
 def test_unknown_match_rejected(client):
@@ -434,3 +493,59 @@ def test_idempotency_key_conflict(client):
         headers=headers,
     )
     assert conflict.status_code == 409
+
+
+def test_accept_odds_change_uses_server_odds(client):
+    token = register_and_token(client, "accept-odds@example.com")
+    seed_wallet(client, token, 100)
+    ensure_open_game("m1", odds_home=2.0)
+    resp = client.post(
+        "/api/v1/bets/place",
+        json={
+            "stake": 10,
+            "accept_odds_change": True,
+            "selections": [
+                {
+                    "match_id": "m1",
+                    "home_team": "Arsenal",
+                    "away_team": "Chelsea",
+                    "selection": "home",
+                    "selection_label": "Home",
+                    "odds": 99.0,
+                    "league": "EPL",
+                }
+            ],
+        },
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 201
+    assert resp.json()["selections"][0]["odds"] == 2.0
+    me = client.get("/api/v1/auth/me", headers=auth_headers(token)).json()
+    assert me["balance"] == 90
+
+
+def test_suspended_match_rejected(client):
+    token = register_and_token(client, "suspended@example.com")
+    seed_wallet(client, token)
+    ensure_open_game("sus-m1", odds_home=2.0, status="suspended")
+    resp = client.post(
+        "/api/v1/bets/place",
+        json={
+            "stake": 10,
+            "selections": [
+                {
+                    "match_id": "sus-m1",
+                    "home_team": "Arsenal",
+                    "away_team": "Chelsea",
+                    "selection": "home",
+                    "selection_label": "Home",
+                    "odds": 2.0,
+                }
+            ],
+        },
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 400
+    assert "suspended" in resp.json()["detail"].lower()
+    me = client.get("/api/v1/auth/me", headers=auth_headers(token)).json()
+    assert me["balance"] == 100

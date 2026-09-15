@@ -155,6 +155,46 @@ def test_production_rejects_simulated_payments_without_override(monkeypatch):
         settings.validate_for_runtime()
 
 
+def test_production_moolre_live_requires_public_key(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("SECRET_KEY", "unit-test-production-secret-key")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host:5432/db")
+    monkeypatch.setenv("CORS_ORIGINS", "https://example.com")
+    monkeypatch.setenv("PAYMENTS_MODE", "moolre")
+    monkeypatch.setenv("MOOLRE_ENV", "production")
+    monkeypatch.setenv("MOOLRE_API_USER", "user")
+    monkeypatch.setenv("MOOLRE_ACCOUNT_NUMBER", "account")
+    monkeypatch.setenv("MOOLRE_WEBHOOK_SECRET", "secret")
+    monkeypatch.delenv("MOOLRE_PUBLIC_KEY", raising=False)
+    settings = Settings()
+    with pytest.raises(RuntimeError, match="MOOLRE_PUBLIC_KEY"):
+        settings.validate_for_runtime()
+
+
+def test_sandbox_env_rejects_live_api_url():
+    settings = Settings(
+        moolre_env="sandbox",
+        moolre_api_base_url="https://api.moolre.com",
+    )
+    with pytest.raises(RuntimeError, match="sandbox"):
+        settings.moolre_request_base_url()
+
+
+def test_production_moolre_requires_webhook_secret(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("SECRET_KEY", "unit-test-production-secret-key")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host:5432/db")
+    monkeypatch.setenv("CORS_ORIGINS", "https://example.com")
+    monkeypatch.setenv("PAYMENTS_MODE", "moolre")
+    monkeypatch.setenv("MOOLRE_API_USER", "user")
+    monkeypatch.setenv("MOOLRE_PUBLIC_KEY", "public")
+    monkeypatch.setenv("MOOLRE_ACCOUNT_NUMBER", "account")
+    monkeypatch.delenv("MOOLRE_WEBHOOK_SECRET", raising=False)
+    settings = Settings()
+    with pytest.raises(RuntimeError, match="MOOLRE_WEBHOOK_SECRET"):
+        settings.validate_for_runtime()
+
+
 def test_heroku_dyno_rejects_sqlite_default(monkeypatch):
     monkeypatch.setenv("DYNO", "release.1")
     monkeypatch.setenv("DATABASE_URL", "sqlite:///./betplus.db")

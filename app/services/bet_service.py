@@ -1,3 +1,4 @@
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -5,13 +6,19 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.core.codes import generate_booking_code, generate_ticket_id, generate_verify_code
+from app.core.codes import (
+    generate_booking_code,
+    generate_ticket_id,
+    generate_verify_code,
+)
 from app.core.money import to_decimal
 from app.models.bet import Bet, BetSelection
 from app.models.game import Game
 from app.services.catalog_service import price_selection
 from app.services.ledger_service import LedgerService
 from app.services.wallet_service import InsufficientBalanceError, WalletService
+
+logger = logging.getLogger("app.settlement")
 
 
 @dataclass
@@ -26,6 +33,12 @@ class SelectionInput:
     market_id: str | None = None
     market_name: str | None = None
     kickoff: datetime | None = None
+
+
+class OddsChangedError(ValueError):
+    def __init__(self, changes: list[dict]):
+        super().__init__("One or more selections have changed odds")
+        self.changes = changes
 
 
 class BetService:
@@ -61,6 +74,8 @@ class BetService:
         stake: float,
         selections: list[SelectionInput],
         flex_cut: int | None = None,
+        accept_odds_change: bool = False,
+        commit: bool = True,
     ) -> Bet:
         if not selections:
             raise ValueError("At least one selection is required")
@@ -70,6 +85,7 @@ class BetService:
             raise ValueError("Stake must be positive")
 
         priced = []
+        odds_changes = []
         total_odds = Decimal("1")
         for sel in selections:
             resolved = price_selection(
@@ -79,8 +95,22 @@ class BetService:
                 selection_label=sel.selection_label,
                 market_id=sel.market_id,
             )
+            client_odds = to_decimal(sel.odds)
+            if abs(client_odds - resolved.odds) > Decimal("0.0001"):
+                odds_changes.append(
+                    {
+                        "match_id": resolved.match_id,
+                        "selection": resolved.selection,
+                        "selection_label": resolved.selection_label,
+                        "previous_odds": float(client_odds),
+                        "current_odds": float(resolved.odds),
+                    }
+                )
             priced.append(resolved)
             total_odds *= resolved.odds
+
+        if odds_changes and not accept_odds_change:
+            raise OddsChangedError(odds_changes)
 
         potential_win = (dec_stake * total_odds).quantize(Decimal("0.01"))
         bonus = (
@@ -93,7 +123,9 @@ class BetService:
         booking_code = generate_booking_code(existing_codes)
         ticket_ids = {
             tid
-            for (tid,) in db.query(Bet.ticket_id).filter(Bet.ticket_id.isnot(None)).all()
+            for (tid,) in db.query(Bet.ticket_id)
+            .filter(Bet.ticket_id.isnot(None))
+            .all()
         }
         verify_codes = {
             vid
@@ -159,8 +191,9 @@ class BetService:
             bet.id,
             f"Bet {booking_code}",
         )
-        db.commit()
-        db.refresh(bet)
+        if commit:
+            db.commit()
+            db.refresh(bet)
         return bet
 
     @staticmethod
@@ -228,7 +261,10 @@ def evaluate_pick_result(
 
     score_match = re.match(r"^(\d+)\s*[:\-]\s*(\d+)$", label)
     if score_match:
-        return int(score_match.group(1)) == home_goals and int(score_match.group(2)) == away_goals
+        return (
+            int(score_match.group(1)) == home_goals
+            and int(score_match.group(2)) == away_goals
+        )
 
     return False
 
@@ -321,7 +357,9 @@ class SettlementService:
         if any(r.get("void") for r in leg_results):
             return "void"
 
-        lost_count = sum(1 for r in leg_results if not r.get("won") and not r.get("void"))
+        lost_count = sum(
+            1 for r in leg_results if not r.get("won") and not r.get("void")
+        )
         flex_cut = bet.flex_cut or 0
         if flex_cut > 0:
             return "won" if lost_count <= flex_cut else "lost"
@@ -376,12 +414,7 @@ class SettlementService:
         force_status: str | None = None,
         commit: bool = True,
     ) -> Bet:
-        locked = (
-            db.query(Bet)
-            .filter(Bet.id == bet.id)
-            .with_for_update()
-            .first()
-        )
+        locked = db.query(Bet).filter(Bet.id == bet.id).with_for_update().first()
         if not locked:
             raise ValueError("Bet not found")
         bet = locked
@@ -432,7 +465,11 @@ class SettlementService:
         open_bets = q.order_by(Bet.placed_at).limit(limit).all()
         settled: list[Bet] = []
         for bet in open_bets:
-            settled.append(SettlementService.settle_bet(db, bet, commit=True))
+            try:
+                settled.append(SettlementService.settle_bet(db, bet, commit=True))
+            except Exception:
+                logger.exception("Failed to settle bet %s", bet.id)
+                db.rollback()
         return settled
 
     @staticmethod
@@ -492,11 +529,7 @@ class SettlementService:
 
         leg_results: list[dict] = list(bet.leg_results or [])
         result_idx = next(
-            (
-                i
-                for i, r in enumerate(leg_results)
-                if r.get("legIndex") == leg_index
-            ),
+            (i for i, r in enumerate(leg_results) if r.get("legIndex") == leg_index),
             None,
         )
         if outcome_status in (None, "not_started"):

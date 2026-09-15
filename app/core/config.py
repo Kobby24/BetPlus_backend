@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     allow_demo_seed: bool = Field(default=False, validation_alias="ALLOW_DEMO_SEED")
     environment: str = Field(default="development", validation_alias="ENVIRONMENT")
     port: int = Field(default=8000, validation_alias="PORT")
+    settlement_poll_seconds: float = Field(
+        default=10.0, validation_alias="SETTLEMENT_POLL_SECONDS"
+    )
 
     rate_limit_enabled: bool = Field(
         default=True, validation_alias="RATE_LIMIT_ENABLED"
@@ -186,6 +189,11 @@ class Settings(BaseSettings):
     def clamp_live_sync_attempts(cls, value: int) -> int:
         return min(max(int(value), 1), 5)
 
+    @field_validator("settlement_poll_seconds")
+    @classmethod
+    def clamp_settlement_poll(cls, value: float) -> float:
+        return min(max(float(value), 1.0), 300.0)
+
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
@@ -212,6 +220,23 @@ class Settings(BaseSettings):
         return [
             origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
         ]
+
+    @property
+    def cookie_secure(self) -> bool:
+        return self.environment not in {"development", "test"}
+
+    def moolre_request_base_url(self) -> str:
+        configured = (self.moolre_api_base_url or "").strip().rstrip("/")
+        sandbox = "https://sandbox.moolre.com"
+        live = "https://api.moolre.com"
+        if self.moolre_env == "sandbox":
+            if configured == live:
+                raise RuntimeError(
+                    "MOOLRE_ENV=sandbox cannot use https://api.moolre.com; "
+                    "set MOOLRE_ENV=production to use live APIs"
+                )
+            return configured or sandbox
+        return configured or live
 
     @property
     def should_seed_demo(self) -> bool:
@@ -267,16 +292,19 @@ class Settings(BaseSettings):
                 name
                 for name, value in {
                     "MOOLRE_API_USER": self.moolre_api_user,
-                    "MOOLRE_PUBLIC_KEY": self.moolre_public_key,
                     "MOOLRE_ACCOUNT_NUMBER": self.moolre_account_number,
+                    "MOOLRE_WEBHOOK_SECRET": self.moolre_webhook_secret,
                 }.items()
                 if not value
             ]
+            if self.moolre_env != "sandbox" and not self.moolre_public_key:
+                missing.append("MOOLRE_PUBLIC_KEY")
             if missing:
                 raise RuntimeError(
                     "Missing required Moolre production configuration: "
                     + ", ".join(missing)
                 )
+            self.moolre_request_base_url()
 
 
 @lru_cache

@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
 from sqlalchemy.orm import Session
@@ -8,7 +8,7 @@ from app.db.schema_status import missing_required_columns, missing_required_tabl
 from app.db.session import get_db
 from app.models.user import User
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
 
 def require_migrated_schema(db: Session = Depends(get_db)) -> None:
@@ -27,15 +27,20 @@ def require_migrated_schema(db: Session = Depends(get_db)) -> None:
 
 
 def get_current_user(
-    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+    request: Request,
+    token: str | None = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
 ) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    access_token = token or request.cookies.get("betplus_access_token")
+    if not access_token:
+        raise credentials_exception
     try:
-        payload = decode_access_token(token)
+        payload = decode_access_token(access_token)
         sub = payload.get("sub")
         if sub is None:
             raise credentials_exception
