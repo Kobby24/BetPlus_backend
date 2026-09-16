@@ -103,7 +103,14 @@ class SportyBetLiveSyncJobOut(BaseModel):
     completed_at: datetime | None = None
 
 
-class GameOut(BaseModel):
+class GameListOut(BaseModel):
+    """Catalog list row.
+
+    Omits ``markets``: a full markets blob per row makes list responses large
+    enough to exhaust the web dyno's memory budget. Use ``GameOut`` (the
+    single-game detail response) when markets are needed.
+    """
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -124,6 +131,9 @@ class GameOut(BaseModel):
     odds_home: float | None = None
     odds_draw: float | None = None
     odds_away: float | None = None
+
+
+class GameOut(GameListOut):
     markets: list[dict[str, Any]] = Field(default_factory=list)
 
 

@@ -106,6 +106,14 @@ class Settings(BaseSettings):
         default=2.0,
         validation_alias="SPORTYBET_LIVE_SYNC_POLL_SECONDS",
     )
+    sportybet_live_sync_interval_seconds: float = Field(
+        default=30.0,
+        validation_alias="SPORTYBET_LIVE_SYNC_INTERVAL_SECONDS",
+    )
+    sportybet_important_sync_interval_seconds: float = Field(
+        default=300.0,
+        validation_alias="SPORTYBET_IMPORTANT_SYNC_INTERVAL_SECONDS",
+    )
     sportybet_live_sync_max_attempts: int = Field(
         default=3,
         validation_alias="SPORTYBET_LIVE_SYNC_MAX_ATTEMPTS",
@@ -183,6 +191,15 @@ class Settings(BaseSettings):
     @classmethod
     def clamp_live_sync_poll(cls, value: float) -> float:
         return min(max(float(value), 0.25), 30.0)
+
+    @field_validator(
+        "sportybet_live_sync_interval_seconds",
+        "sportybet_important_sync_interval_seconds",
+    )
+    @classmethod
+    def clamp_sync_interval(cls, value: float) -> float:
+        # 0 disables worker auto-enqueue for that sync type.
+        return min(max(float(value), 0.0), 3600.0)
 
     @field_validator("sportybet_live_sync_max_attempts")
     @classmethod

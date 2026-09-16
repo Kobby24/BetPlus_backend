@@ -521,11 +521,13 @@ def test_endpoint_success_and_catalog_read(client, monkeypatch, clean_imported_g
     assert match["away"] == "Chelsea"
     assert match["sport"] == "football"
     assert match["league_name"] == "Premier League"
-    assert any(m["id"] == "1x2" for m in match["markets"])
+    assert "markets" not in match
 
     one = client.get(f"/api/v1/catalog/games/{EXAMPLE_PUBLIC_ID}")
     assert one.status_code == 200
-    assert one.json()["odds_home"] == 2.15
+    detail = one.json()
+    assert detail["odds_home"] == 2.15
+    assert any(m["id"] == "1x2" for m in detail["markets"])
 
 
 def test_upstream_errors_fail_the_job_not_the_request(client, clean_imported_games):

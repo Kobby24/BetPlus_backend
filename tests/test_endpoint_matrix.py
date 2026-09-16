@@ -28,14 +28,24 @@ def test_catalog_endpoints(client):
 
     games = client.get("/api/v1/catalog/games")
     assert games.status_code == 200
-    assert any(g["external_id"] == "m1" for g in games.json())
+    rows = games.json()
+    match = next(g for g in rows if g["external_id"] == "m1")
+    assert "markets" not in match
 
     football = client.get("/api/v1/catalog/games", params={"sport": "football"})
     assert football.status_code == 200
+    assert any(g["external_id"] == "m1" for g in football.json())
+
+    by_league = client.get(
+        "/api/v1/catalog/games", params={"league_id": match["league_id"]}
+    )
+    assert by_league.status_code == 200
+    assert any(g["external_id"] == "m1" for g in by_league.json())
 
     one = client.get("/api/v1/catalog/games/m1")
     assert one.status_code == 200
     assert one.json()["home"] == "Arsenal"
+    assert any(m["id"] == "1x2" for m in one.json()["markets"])
 
     missing = client.get("/api/v1/catalog/games/does-not-exist")
     assert missing.status_code == 404
