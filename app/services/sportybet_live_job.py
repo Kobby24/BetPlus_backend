@@ -1,6 +1,8 @@
-"""PostgreSQL-backed queue for SportyBet live/prematch synchronization.
+"""PostgreSQL-backed queue for SportyBet catalog synchronization.
 
-The web dyno only enqueues. A Heroku worker claims and executes jobs.
+The web dyno only enqueues. A Heroku worker claims and executes jobs, so no
+upstream scrape ever runs inside a web request or holds a pooled connection
+while waiting on SportyBet.
 """
 
 from __future__ import annotations
@@ -8,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -17,6 +20,10 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import SessionLocal, engine
 from app.models.sportybet_sync_job import SportyBetSyncJob, new_uuid
+from app.services.sportybet_client import (
+    SportyBetUpstreamError,
+    fetch_important_events,
+)
 from app.services.sportybet_live_client import (
     SportyBetLiveUpstreamError,
     fetch_live_or_prematch_events,
@@ -25,14 +32,59 @@ from app.services.sportybet_live_sync import (
     LiveCatalogSchemaError,
     sync_sportybet_live_games,
 )
+from app.services.sportybet_sync import CatalogSchemaError, sync_sportybet_payload
 
 logger = logging.getLogger("app.services.sportybet_live_job")
 
 LIVE_SYNC_TYPE = "live_or_prematch"
+IMPORTANT_SYNC_TYPE = "important_events"
 ACTIVE_STATUSES = ("queued", "running")
 SAFE_ERROR_MAX = 180
 
+UPSTREAM_ERRORS = (SportyBetLiveUpstreamError, SportyBetUpstreamError)
+SCHEMA_ERRORS = (LiveCatalogSchemaError, CatalogSchemaError)
+
 FetchFn = Callable[..., Any]
+RunFn = Callable[[Session, dict[str, Any], Any], dict[str, Any]]
+
+
+def _fetch_live() -> Any:
+    return fetch_live_or_prematch_events()
+
+
+def _run_live(db: Session, payload: dict[str, Any], on_progress) -> dict[str, Any]:
+    return sync_sportybet_live_games(db, payload, on_progress=on_progress)
+
+
+def _fetch_important() -> Any:
+    return fetch_important_events()
+
+
+def _run_important(db: Session, payload: dict[str, Any], _on_progress) -> dict[str, Any]:
+    # Single pass, so the caller's final summary is the only progress report.
+    return sync_sportybet_payload(db, payload)
+
+
+@dataclass(frozen=True)
+class SyncHandler:
+    """Upstream fetch plus persistence for one ``sync_type``."""
+
+    fetch: FetchFn
+    run: RunFn
+
+
+SYNC_HANDLERS: dict[str, SyncHandler] = {
+    LIVE_SYNC_TYPE: SyncHandler(fetch=_fetch_live, run=_run_live),
+    IMPORTANT_SYNC_TYPE: SyncHandler(fetch=_fetch_important, run=_run_important),
+}
+SYNC_TYPES = tuple(SYNC_HANDLERS)
+
+
+def handler_for(sync_type: str) -> SyncHandler:
+    try:
+        return SYNC_HANDLERS[sync_type]
+    except KeyError:
+        raise ValueError(f"unknown sportybet sync_type {sync_type!r}") from None
 
 
 def _now() -> datetime:
@@ -62,11 +114,13 @@ def _log_pool_status(message: str, *, job_id: str | None = None) -> None:
     )
 
 
-def find_active_live_sync_job(db: Session) -> SportyBetSyncJob | None:
+def find_active_sync_job(
+    db: Session, sync_type: str = LIVE_SYNC_TYPE
+) -> SportyBetSyncJob | None:
     return (
         db.query(SportyBetSyncJob)
         .filter(
-            SportyBetSyncJob.sync_type == LIVE_SYNC_TYPE,
+            SportyBetSyncJob.sync_type == sync_type,
             SportyBetSyncJob.status.in_(ACTIVE_STATUSES),
         )
         .order_by(SportyBetSyncJob.created_at.asc())
@@ -74,10 +128,12 @@ def find_active_live_sync_job(db: Session) -> SportyBetSyncJob | None:
     )
 
 
-def find_latest_live_sync_job(db: Session) -> SportyBetSyncJob | None:
+def find_latest_sync_job(
+    db: Session, sync_type: str = LIVE_SYNC_TYPE
+) -> SportyBetSyncJob | None:
     return (
         db.query(SportyBetSyncJob)
-        .filter(SportyBetSyncJob.sync_type == LIVE_SYNC_TYPE)
+        .filter(SportyBetSyncJob.sync_type == sync_type)
         .order_by(
             SportyBetSyncJob.created_at.desc(),
             SportyBetSyncJob.id.desc(),
@@ -86,24 +142,39 @@ def find_latest_live_sync_job(db: Session) -> SportyBetSyncJob | None:
     )
 
 
-def find_current_live_sync_job(db: Session) -> SportyBetSyncJob | None:
+def find_current_sync_job(
+    db: Session, sync_type: str = LIVE_SYNC_TYPE
+) -> SportyBetSyncJob | None:
     """Job stored for the bot: the active one, otherwise the latest row."""
-    return find_active_live_sync_job(db) or find_latest_live_sync_job(db)
+    return find_active_sync_job(db, sync_type) or find_latest_sync_job(db, sync_type)
 
 
-def enqueue_live_sync_job(
-    db: Session, *, actor_id: str | None = None
+# Live-specific names kept for existing callers.
+find_active_live_sync_job = find_active_sync_job
+find_latest_live_sync_job = find_latest_sync_job
+find_current_live_sync_job = find_current_sync_job
+
+
+def enqueue_sync_job(
+    db: Session,
+    *,
+    actor_id: str | None = None,
+    sync_type: str = LIVE_SYNC_TYPE,
 ) -> tuple[SportyBetSyncJob, bool]:
     """Create a queued job, or return the existing queued/running one.
 
+    Single-flight per ``sync_type``: a partial unique index keeps at most one
+    queued/running row, so repeated bot calls cannot stack scrapes.
+
     Returns (job, created).
     """
-    existing = find_active_live_sync_job(db)
+    handler_for(sync_type)
+    existing = find_active_sync_job(db, sync_type)
     if existing:
         return existing, False
     job = SportyBetSyncJob(
         id=new_uuid(),
-        sync_type=LIVE_SYNC_TYPE,
+        sync_type=sync_type,
         status="queued",
         actor_id=actor_id,
     )
@@ -113,10 +184,13 @@ def enqueue_live_sync_job(
             db.flush()
         return job, True
     except IntegrityError:
-        existing = find_active_live_sync_job(db)
+        existing = find_active_sync_job(db, sync_type)
         if existing:
             return existing, False
         raise
+
+
+enqueue_live_sync_job = enqueue_sync_job
 
 
 def job_queued_payload(job: SportyBetSyncJob) -> dict[str, Any]:
@@ -152,11 +226,11 @@ def job_status_payload(job: SportyBetSyncJob) -> dict[str, Any]:
     }
 
 
-def idle_job_payload() -> dict[str, Any]:
+def idle_job_payload(sync_type: str = LIVE_SYNC_TYPE) -> dict[str, Any]:
     return {
         "job_id": None,
         "status": "idle",
-        "sync_type": LIVE_SYNC_TYPE,
+        "sync_type": sync_type,
         "fetched": 0,
         "processed": 0,
         "created": 0,
@@ -176,9 +250,11 @@ def idle_job_payload() -> dict[str, Any]:
     }
 
 
-def current_job_status_payload(job: SportyBetSyncJob | None) -> dict[str, Any]:
+def current_job_status_payload(
+    job: SportyBetSyncJob | None, sync_type: str = LIVE_SYNC_TYPE
+) -> dict[str, Any]:
     if job is None:
-        return idle_job_payload()
+        return idle_job_payload(sync_type)
     return job_status_payload(job)
 
 
@@ -186,7 +262,10 @@ def apply_summary_to_job(job: SportyBetSyncJob, summary: dict[str, Any]) -> None
     job.fetched = int(summary.get("fetched") or 0)
     job.created_count = int(summary.get("created") or 0)
     job.updated_count = int(summary.get("updated") or 0)
-    job.unchanged_count = int(summary.get("unchanged") or 0)
+    # important-events reports untouched rows as skipped_existing.
+    job.unchanged_count = int(
+        summary.get("unchanged") or summary.get("skipped_existing") or 0
+    )
     job.skipped_invalid = int(summary.get("skipped_invalid") or 0)
     job.skipped_protected = int(summary.get("skipped_protected") or 0)
     job.failed = int(summary.get("failed") or 0)
@@ -202,7 +281,7 @@ def apply_summary_to_job(job: SportyBetSyncJob, summary: dict[str, Any]) -> None
     )
 
 
-def recover_stale_live_sync_jobs(
+def recover_stale_sync_jobs(
     db: Session,
     *,
     now: datetime | None = None,
@@ -250,17 +329,20 @@ def recover_stale_live_sync_jobs(
     return len(stale)
 
 
-def claim_next_live_sync_job(
-    db: Session, *, job_id: str | None = None
+recover_stale_live_sync_jobs = recover_stale_sync_jobs
+
+
+def claim_next_sync_job(
+    db: Session, *, job_id: str | None = None, sync_type: str | None = None
 ) -> SportyBetSyncJob | None:
+    """Claim one queued job. ``sync_type=None`` claims any type."""
     q = (
         db.query(SportyBetSyncJob)
-        .filter(
-            SportyBetSyncJob.sync_type == LIVE_SYNC_TYPE,
-            SportyBetSyncJob.status == "queued",
-        )
+        .filter(SportyBetSyncJob.status == "queued")
         .order_by(SportyBetSyncJob.created_at.asc())
     )
+    if sync_type is not None:
+        q = q.filter(SportyBetSyncJob.sync_type == sync_type)
     if job_id is not None:
         q = q.filter(SportyBetSyncJob.id == job_id)
     bind = db.get_bind()
@@ -293,6 +375,12 @@ def claim_next_live_sync_job(
     return job
 
 
+def claim_next_live_sync_job(
+    db: Session, *, job_id: str | None = None
+) -> SportyBetSyncJob | None:
+    return claim_next_sync_job(db, job_id=job_id, sync_type=LIVE_SYNC_TYPE)
+
+
 def _await_fetch(fetch: FetchFn) -> dict[str, Any]:
     result = fetch()
     if asyncio.iscoroutine(result):
@@ -300,7 +388,7 @@ def _await_fetch(fetch: FetchFn) -> dict[str, Any]:
             asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(result)
-        raise RuntimeError("live sync worker must run outside an event loop")
+        raise RuntimeError("sync worker must run outside an event loop")
     return result
 
 
@@ -334,9 +422,17 @@ def _fail_job(job_id: str, message: str) -> SportyBetSyncJob | None:
             _log_pool_status("Live-sync failure status persisted", job_id=job_id)
 
 
+def _reattach(db: Session, job: SportyBetSyncJob) -> SportyBetSyncJob:
+    """Re-associate the job row after a sync pass expunged the identity map."""
+    if job not in db:
+        db.add(job)
+    return job
+
+
 def _fail_job_in_session(
     db: Session, job: SportyBetSyncJob, message: str
 ) -> SportyBetSyncJob:
+    _reattach(db, job)
     job.status = "failed"
     job.completed_at = _now()
     job.error_message = _safe_error(message)
@@ -346,30 +442,39 @@ def _fail_job_in_session(
     return job
 
 
-def execute_live_sync_job(
+def execute_sync_job(
     job_id: str,
     *,
     fetch: FetchFn | None = None,
     claimed: bool = False,
+    sync_type: str | None = None,
 ) -> SportyBetSyncJob:
     """Run a job without holding a database connection during upstream HTTP work."""
-    fetch_fn = fetch or fetch_live_or_prematch_events
     if not claimed:
         with SessionLocal() as claim_db:
-            job = claim_next_live_sync_job(claim_db, job_id=job_id)
+            job = claim_next_sync_job(claim_db, job_id=job_id)
             if job is None:
                 snapshot = _load_job_snapshot(job_id)
                 if snapshot is None:
-                    raise LookupError(f"live sync job {job_id} not found")
+                    raise LookupError(f"sync job {job_id} not found")
                 return snapshot
+            sync_type = job.sync_type
             claim_db.expunge(job)
         claimed = True
+
+    if sync_type is None:
+        snapshot = _load_job_snapshot(job_id)
+        if snapshot is None:
+            raise LookupError(f"sync job {job_id} not found")
+        sync_type = snapshot.sync_type
+    handler = handler_for(sync_type)
+    fetch_fn = fetch or handler.fetch
 
     _log_pool_status("Live-sync job claimed; starting upstream fetch", job_id=job_id)
     try:
         payload = _await_fetch(fetch_fn)
         _log_pool_status("Upstream fetch completed; opening persistence session", job_id=job_id)
-    except SportyBetLiveUpstreamError as exc:
+    except UPSTREAM_ERRORS as exc:
         logger.warning("Live-sync job %s upstream failure: %s", job_id, exc.message)
         return _fail_job(job_id, exc.message)  # type: ignore[return-value]
     except Exception as exc:
@@ -380,18 +485,18 @@ def execute_live_sync_job(
         try:
             job = db.get(SportyBetSyncJob, job_id)
             if job is None:
-                raise LookupError(f"live sync job {job_id} not found")
+                raise LookupError(f"sync job {job_id} not found")
             if job.status != "running":
                 db.expunge(job)
                 return job
 
             def on_progress(summary: dict[str, Any]) -> None:
+                _reattach(db, job)
                 apply_summary_to_job(job, summary)
                 db.add(job)
 
-            summary = sync_sportybet_live_games(
-                db, payload, on_progress=on_progress
-            )
+            summary = handler.run(db, payload, on_progress)
+            _reattach(db, job)
             apply_summary_to_job(job, summary)
             job.status = "completed"
             job.completed_at = _now()
@@ -408,11 +513,11 @@ def execute_live_sync_job(
             )
             _log_pool_status("Live-sync persistence committed", job_id=job_id)
             return job
-        except SportyBetLiveUpstreamError as exc:
+        except UPSTREAM_ERRORS as exc:
             logger.warning("Live-sync job %s upstream failure during persistence: %s", job_id, exc.message)
             db.rollback()
             return _fail_job_in_session(db, job, exc.message)
-        except LiveCatalogSchemaError as exc:
+        except SCHEMA_ERRORS as exc:
             logger.exception("Live-sync job %s schema error", job_id)
             db.rollback()
             return _fail_job_in_session(db, job, str(exc))
@@ -429,12 +534,23 @@ def execute_live_sync_job(
             _log_pool_status("Live-sync persistence session closing", job_id=job_id)
 
 
-def process_one_live_sync_job(*, fetch: FetchFn | None = None) -> str | None:
+execute_live_sync_job = execute_sync_job
+
+
+def process_one_sync_job(
+    *, fetch: FetchFn | None = None, sync_type: str | None = None
+) -> str | None:
+    """Claim and run one queued job. ``sync_type=None`` accepts any type."""
     with SessionLocal() as db:
-        recover_stale_live_sync_jobs(db)
-        job = claim_next_live_sync_job(db)
+        recover_stale_sync_jobs(db)
+        job = claim_next_sync_job(db, sync_type=sync_type)
         job_id = job.id if job else None
+        claimed_type = job.sync_type if job else None
     if not job_id:
         return None
-    execute_live_sync_job(job_id, fetch=fetch, claimed=True)
+    execute_sync_job(job_id, fetch=fetch, claimed=True, sync_type=claimed_type)
     return job_id
+
+
+def process_one_live_sync_job(*, fetch: FetchFn | None = None) -> str | None:
+    return process_one_sync_job(fetch=fetch, sync_type=LIVE_SYNC_TYPE)

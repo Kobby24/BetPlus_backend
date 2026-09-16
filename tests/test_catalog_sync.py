@@ -7,14 +7,20 @@ from pathlib import Path
 import httpx
 import pytest
 
+from app.api.v1.catalog import reset_sync_infrastructure_cache
 from app.db.session import SessionLocal
 from app.models.game import Game
+from app.models.sportybet_sync_job import SportyBetSyncJob
 from app.services.bet_service import SettlementService
 from app.services.sportybet_client import (
     SportyBetUpstreamError,
     fetch_important_events,
     sportybet_headers,
     validate_facts_payload,
+)
+from app.services.sportybet_live_job import (
+    IMPORTANT_SYNC_TYPE,
+    process_one_sync_job,
 )
 from app.services.sportybet_sync import (
     parse_event,
@@ -41,9 +47,15 @@ def reset_imported_games() -> None:
         db.query(Game).filter(Game.external_event_id.isnot(None)).delete(
             synchronize_session=False
         )
+        db.query(SportyBetSyncJob).delete(synchronize_session=False)
         db.commit()
     finally:
         db.close()
+
+
+def run_queued_important_sync(fetch) -> str | None:
+    """Drain the queued important-events job the way the worker dyno does."""
+    return process_one_sync_job(fetch=fetch, sync_type=IMPORTANT_SYNC_TYPE)
 
 
 @pytest.fixture
@@ -415,6 +427,7 @@ def test_concurrent_sync_does_not_duplicate(clean_imported_games):
 
 
 def test_endpoint_returns_503_when_schema_is_not_migrated(client, monkeypatch):
+    reset_sync_infrastructure_cache()
     monkeypatch.setattr(
         "app.api.v1.catalog.missing_required_columns",
         lambda _bind: ["games.external_event_id", "games.external_game_id"],
@@ -425,7 +438,9 @@ def test_endpoint_returns_503_when_schema_is_not_migrated(client, monkeypatch):
         called["fetch"] = True
         return load_fixture()
 
-    monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", fake_fetch)
+    monkeypatch.setattr(
+        "app.services.sportybet_live_job.fetch_important_events", fake_fetch
+    )
     resp = client.post(SYNC_URL)
     assert resp.status_code == 503
     assert "alembic upgrade head" in resp.json()["detail"]
@@ -435,32 +450,68 @@ def test_endpoint_returns_503_when_schema_is_not_migrated(client, monkeypatch):
     legacy = client.post("/api/catalog/sync/sportybet")
     assert legacy.status_code == 503
     assert called["fetch"] is False
+    reset_sync_infrastructure_cache()
 
 
-def test_endpoint_is_public(client, monkeypatch, clean_imported_games):
+def test_endpoint_is_public(client, clean_imported_games):
+    resp = client.post(SYNC_URL)
+    assert resp.status_code == 202
+    assert resp.json()["success"] is True
+
+
+def test_post_returns_202_without_scraping_on_the_web_dyno(
+    client, monkeypatch, clean_imported_games
+):
+    called = {"fetch": False}
+
     async def fake_fetch(*args, **kwargs):
+        called["fetch"] = True
         return load_fixture()
 
-    monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", fake_fetch)
+    monkeypatch.setattr(
+        "app.services.sportybet_live_job.fetch_important_events", fake_fetch
+    )
     resp = client.post(SYNC_URL)
-    assert resp.status_code == 200
-    assert resp.json()["success"] is True
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "queued"
+    assert body["job_id"]
+    assert called["fetch"] is False
+
+    current = client.get(SYNC_URL)
+    assert current.status_code == 200
+    assert current.json()["job_id"] == body["job_id"]
+    assert current.json()["sync_type"] == IMPORTANT_SYNC_TYPE
+
+    by_id = client.get(f"/api/v1/catalog/sync/sportybet/jobs/{body['job_id']}")
+    assert by_id.status_code == 200
+    assert by_id.json()["status"] == "queued"
+
+
+def test_repeated_posts_reuse_the_queued_job(client, clean_imported_games):
+    first = client.post(SYNC_URL)
+    second = client.post(SYNC_URL)
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert first.json()["job_id"] == second.json()["job_id"]
 
 
 def test_endpoint_success_and_catalog_read(client, monkeypatch, clean_imported_games):
     async def fake_fetch(*args, **kwargs):
         return load_fixture()
 
-    monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", fake_fetch)
-
     resp = client.post(SYNC_URL)
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["success"] is True
-    assert body["source"] == "sportybet"
-    assert body["fetched"] == 4
-    assert body["created"] >= 2
-    assert body["skipped_invalid"] == 2
+    assert resp.status_code == 202
+    job_id = resp.json()["job_id"]
+
+    assert run_queued_important_sync(fake_fetch) == job_id
+
+    status = client.get(SYNC_URL).json()
+    assert status["job_id"] == job_id
+    assert status["status"] == "completed"
+    assert status["fetched"] == 4
+    assert status["created"] >= 2
+    assert status["skipped_invalid"] == 2
 
     catalog = client.get("/api/v1/catalog/games")
     assert catalog.status_code == 200
@@ -477,37 +528,33 @@ def test_endpoint_success_and_catalog_read(client, monkeypatch, clean_imported_g
     assert one.json()["odds_home"] == 2.15
 
 
-def test_endpoint_upstream_errors(client, monkeypatch):
+def test_upstream_errors_fail_the_job_not_the_request(client, clean_imported_games):
     async def timeout(*args, **kwargs):
         raise SportyBetUpstreamError("Upstream request timed out", status_code=504)
 
-    monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", timeout)
-    assert client.post(SYNC_URL).status_code == 504
+    queued = client.post(SYNC_URL)
+    assert queued.status_code == 202
+    job_id = queued.json()["job_id"]
 
-    async def bad_json(*args, **kwargs):
-        raise SportyBetUpstreamError("Upstream returned invalid JSON")
+    run_queued_important_sync(timeout)
 
-    monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", bad_json)
-    assert client.post(SYNC_URL).status_code == 502
+    status = client.get(f"/api/v1/catalog/sync/sportybet/jobs/{job_id}").json()
+    assert status["status"] == "failed"
+    assert "timed out" in status["error_message"]
 
-    async def upstream_500(*args, **kwargs):
-        raise SportyBetUpstreamError("Upstream returned HTTP 500")
-
-    monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", upstream_500)
-    assert client.post(SYNC_URL).status_code == 502
+    # A failed job is not active, so the bot can queue a fresh attempt.
+    assert client.post(SYNC_URL).json()["job_id"] != job_id
 
 
-def test_imported_game_settlement_compatibility(
-    client, monkeypatch, clean_imported_games
-):
+def test_imported_game_settlement_compatibility(client, clean_imported_games):
     async def fake_fetch(*args, **kwargs):
         return load_fixture()
 
-    monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", fake_fetch)
     user_token = register_and_token(client, "sync-settle-user@example.com")
 
     synced = client.post(SYNC_URL)
-    assert synced.status_code == 200
+    assert synced.status_code == 202
+    assert run_queued_important_sync(fake_fetch) == synced.json()["job_id"]
 
     client.post(
         "/api/v1/wallet/deposit",

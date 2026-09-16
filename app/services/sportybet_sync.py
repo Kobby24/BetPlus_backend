@@ -763,11 +763,24 @@ def upsert_parsed_game(db: Session, parsed: ParsedGame) -> str:
         return "skipped_existing"
 
 
+def _release_synced_states(db: Session, preserved: frozenset) -> None:
+    """Detach rows this sync loaded, keeping whatever the caller already held.
+
+    A full catalog sync otherwise keeps every game, market and outcome in the
+    identity map until it returns, which is what pushes the dyno past its
+    memory quota (Heroku R14).
+    """
+    for key, obj in list(db.identity_map.items()):
+        if key not in preserved:
+            db.expunge(obj)
+
+
 def sync_sportybet_payload(
     db: Session,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     raw_events = extract_raw_events(payload)
+    preserved = frozenset(db.identity_map.keys())
     summary = SyncSummary(
         success=True,
         source="sportybet",
@@ -795,6 +808,7 @@ def sync_sportybet_payload(
             pending += 1
             if pending >= BATCH_SIZE:
                 db.commit()
+                _release_synced_states(db, preserved)
                 pending = 0
         except InvalidSportyBetEvent as exc:
             summary.skipped_invalid += 1
@@ -849,6 +863,7 @@ def sync_sportybet_payload(
             )
     if pending:
         db.commit()
+        _release_synced_states(db, preserved)
     if summary.failed and not (summary.created or summary.updated or summary.skipped_existing):
         summary.success = False
     return summary.as_dict()

@@ -15,21 +15,27 @@ from app.models.game import Game
 from app.models.sportybet_sync_job import SportyBetSyncJob, new_uuid
 from app.services.sportybet_live_client import SportyBetLiveUpstreamError
 from app.services.sportybet_live_job import (
+    IMPORTANT_SYNC_TYPE,
     claim_next_live_sync_job,
     enqueue_live_sync_job,
     execute_live_sync_job,
     process_one_live_sync_job,
+    process_one_sync_job,
     recover_stale_live_sync_jobs,
 )
 from app.services.sportybet_live_parser import public_live_match_id
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "sportybet_live_or_prematch_events.json"
+IMPORTANT_FIXTURE_PATH = (
+    Path(__file__).parent / "fixtures" / "sportybet_important_events.json"
+)
 LIVE_EVENT_ID = "sr:match:80000002"
 LIVE_GAME_ID = "55002"
 LIVE_PUBLIC_ID = public_live_match_id(LIVE_EVENT_ID, LIVE_GAME_ID)
 PREMATCH_EVENT_ID = "sr:match:80000001"
 PREMATCH_GAME_ID = "55001"
 LIVE_SYNC_URL = "/api/v1/catalog/sync/sportybet/live"
+IMPORTANT_SYNC_URL = "/api/v1/catalog/sync/sportybet"
 LEGACY_LIVE_SYNC_URL = "/api/catalog/sync/sportybet/live"
 
 
@@ -166,6 +172,47 @@ def test_worker_completes_job_and_updates_catalog(client, clean_jobs):
     assert legacy.status_code == 202
     assert legacy.json()["status"] == "queued"
     assert legacy.json()["job_id"] != job_id
+
+
+def test_worker_drains_both_sync_types(client, monkeypatch, clean_jobs):
+    """One worker loop serves live and important-events jobs, each with its own fetcher."""
+    fetched: list[str] = []
+
+    async def fake_live_fetch(*args, **kwargs):
+        fetched.append("live")
+        return load_fixture()
+
+    async def fake_important_fetch(*args, **kwargs):
+        fetched.append("important")
+        return json.loads(IMPORTANT_FIXTURE_PATH.read_text(encoding="utf-8"))
+
+    monkeypatch.setattr(
+        "app.services.sportybet_live_job.fetch_live_or_prematch_events",
+        fake_live_fetch,
+    )
+    monkeypatch.setattr(
+        "app.services.sportybet_live_job.fetch_important_events",
+        fake_important_fetch,
+    )
+
+    live_job = client.post(LIVE_SYNC_URL)
+    important_job = client.post(IMPORTANT_SYNC_URL)
+    assert live_job.status_code == 202
+    assert important_job.status_code == 202
+    live_id = live_job.json()["job_id"]
+    important_id = important_job.json()["job_id"]
+    assert live_id != important_id
+
+    processed = {process_one_sync_job(), process_one_sync_job()}
+    assert processed == {live_id, important_id}
+    assert process_one_sync_job() is None
+    assert sorted(fetched) == ["important", "live"]
+
+    assert client.get(LIVE_SYNC_URL).json()["status"] == "completed"
+    important_status = client.get(IMPORTANT_SYNC_URL).json()
+    assert important_status["status"] == "completed"
+    assert important_status["sync_type"] == IMPORTANT_SYNC_TYPE
+    assert important_status["fetched"] > 0
 
 
 def test_worker_live_score_and_finished_transition(clean_jobs):
@@ -405,7 +452,9 @@ def test_post_does_not_call_important_events(client, monkeypatch, clean_jobs):
         called["important"] = True
         return load_fixture()
 
-    monkeypatch.setattr("app.api.v1.catalog.fetch_important_events", fake_important)
+    monkeypatch.setattr(
+        "app.services.sportybet_live_job.fetch_important_events", fake_important
+    )
     resp = client.post(LIVE_SYNC_URL)
     assert resp.status_code == 202
     assert called["important"] is False
