@@ -190,6 +190,54 @@ def enqueue_sync_job(
         raise
 
 
+def _aware(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _sync_interval_seconds(sync_type: str) -> float:
+    settings = get_settings()
+    if sync_type == LIVE_SYNC_TYPE:
+        return float(settings.sportybet_live_sync_interval_seconds)
+    if sync_type == IMPORTANT_SYNC_TYPE:
+        return float(settings.sportybet_important_sync_interval_seconds)
+    return 0.0
+
+
+def sync_type_is_due(db: Session, sync_type: str, *, now: datetime | None = None) -> bool:
+    """True when the worker should enqueue this type without an HTTP trigger."""
+    interval = _sync_interval_seconds(sync_type)
+    if interval <= 0:
+        return False
+    if find_active_sync_job(db, sync_type):
+        return False
+    latest = find_latest_sync_job(db, sync_type)
+    if latest is None:
+        return True
+    stamp = _aware(latest.completed_at) or _aware(latest.started_at) or _aware(
+        latest.created_at
+    )
+    if stamp is None:
+        return True
+    return (now or _now()) - stamp >= timedelta(seconds=interval)
+
+
+def enqueue_due_sync_jobs(
+    db: Session, *, actor_id: str | None = None
+) -> list[tuple[SportyBetSyncJob, bool]]:
+    """Enqueue live/important jobs whose interval has elapsed. Single-flight safe."""
+    queued: list[tuple[SportyBetSyncJob, bool]] = []
+    for sync_type in SYNC_TYPES:
+        if not sync_type_is_due(db, sync_type):
+            continue
+        job, created = enqueue_sync_job(db, actor_id=actor_id, sync_type=sync_type)
+        queued.append((job, created))
+    return queued
+
+
 enqueue_live_sync_job = enqueue_sync_job
 
 

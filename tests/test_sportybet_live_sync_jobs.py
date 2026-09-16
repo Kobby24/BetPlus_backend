@@ -16,7 +16,9 @@ from app.models.sportybet_sync_job import SportyBetSyncJob, new_uuid
 from app.services.sportybet_live_client import SportyBetLiveUpstreamError
 from app.services.sportybet_live_job import (
     IMPORTANT_SYNC_TYPE,
+    LIVE_SYNC_TYPE,
     claim_next_live_sync_job,
+    enqueue_due_sync_jobs,
     enqueue_live_sync_job,
     execute_live_sync_job,
     process_one_live_sync_job,
@@ -548,5 +550,67 @@ def test_idempotent_worker_rerun_does_not_duplicate_games(clean_jobs):
     try:
         stored = db.get(SportyBetSyncJob, job_id)
         assert stored.status == "completed"
+    finally:
+        db.close()
+
+
+def test_worker_auto_enqueues_when_catalog_is_empty(clean_jobs):
+    db = SessionLocal()
+    try:
+        queued = enqueue_due_sync_jobs(db)
+        db.commit()
+        types = {job.sync_type for job, created in queued}
+        assert types == {LIVE_SYNC_TYPE, IMPORTANT_SYNC_TYPE}
+        assert all(created for _job, created in queued)
+        assert db.query(SportyBetSyncJob).count() == 2
+    finally:
+        db.close()
+
+
+def test_worker_does_not_stack_auto_enqueue_on_active_job(clean_jobs):
+    db = SessionLocal()
+    try:
+        existing, created = enqueue_live_sync_job(db)
+        db.commit()
+        assert created is True
+        again = enqueue_due_sync_jobs(db)
+        db.commit()
+        live_jobs = [
+            job for job, _created in again if job.sync_type == LIVE_SYNC_TYPE
+        ]
+        assert live_jobs == [] or all(job.id == existing.id for job in live_jobs)
+        assert (
+            db.query(SportyBetSyncJob)
+            .filter(SportyBetSyncJob.sync_type == LIVE_SYNC_TYPE)
+            .count()
+            == 1
+        )
+    finally:
+        db.close()
+
+
+def test_worker_skips_recent_completed_sync(clean_jobs):
+    db = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+        job = SportyBetSyncJob(
+            id=new_uuid(),
+            sync_type=LIVE_SYNC_TYPE,
+            status="completed",
+            created_at=now,
+            started_at=now,
+            completed_at=now,
+        )
+        db.add(job)
+        db.commit()
+        queued = enqueue_due_sync_jobs(db)
+        db.commit()
+        assert all(item.sync_type != LIVE_SYNC_TYPE for item, _created in queued)
+        assert (
+            db.query(SportyBetSyncJob)
+            .filter(SportyBetSyncJob.sync_type == LIVE_SYNC_TYPE)
+            .count()
+            == 1
+        )
     finally:
         db.close()

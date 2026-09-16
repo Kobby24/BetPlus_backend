@@ -10,7 +10,8 @@ import time
 
 from app.core.config import get_settings
 from app.core.logging import init_logging
-from app.services.sportybet_live_job import process_one_sync_job
+from app.db.session import SessionLocal
+from app.services.sportybet_live_job import enqueue_due_sync_jobs, process_one_sync_job
 
 logger = logging.getLogger("app.workers.live_sync")
 
@@ -28,6 +29,15 @@ def run_forever() -> None:
             if job_id:
                 logger.info("Processed sync job %s", job_id)
                 continue
+            with SessionLocal() as db:
+                due = enqueue_due_sync_jobs(db)
+                if due:
+                    db.commit()
+                    logger.info(
+                        "Auto-queued %s sync job(s)",
+                        ", ".join(job.sync_type for job, _created in due),
+                    )
+                    continue
         except Exception:
             logger.exception("Live-sync worker loop error")
         time.sleep(poll)

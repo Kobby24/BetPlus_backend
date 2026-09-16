@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from app.db.session import SessionLocal
 from app.models.game import Game
 from app.models.league import League
@@ -46,6 +48,8 @@ def ensure_open_game(
     odds_draw: float | None = 3.4,
     odds_away: float = 3.2,
     status: str = "scheduled",
+    is_live: int = 0,
+    starts_at: datetime | None = None,
 ):
     db = SessionLocal()
     try:
@@ -61,6 +65,11 @@ def ensure_open_game(
             db.flush()
         game = db.query(Game).filter(Game.external_id == external_id).first()
         markets = build_seed_markets(home, away, odds_home, odds_draw, odds_away)
+        if starts_at is None:
+            if status == "finished" or is_live:
+                starts_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+            else:
+                starts_at = datetime.now(timezone.utc) + timedelta(hours=2)
         if not game:
             game = Game(
                 external_id=external_id,
@@ -70,6 +79,8 @@ def ensure_open_game(
                 home_abbr=home[:3].upper(),
                 away_abbr=away[:3].upper(),
                 status=status,
+                is_live=is_live,
+                starts_at=starts_at,
                 odds_home=odds_home,
                 odds_draw=odds_draw,
                 odds_away=odds_away,
@@ -78,6 +89,8 @@ def ensure_open_game(
             db.add(game)
         else:
             game.status = status
+            game.is_live = is_live
+            game.starts_at = starts_at
             game.odds_home = odds_home
             game.odds_draw = odds_draw
             game.odds_away = odds_away

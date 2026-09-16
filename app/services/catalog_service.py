@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -194,9 +195,7 @@ def price_selection(db: Session, *, match_id: str, selection: str, selection_lab
     )
 
 
-def catalog_game_view(db: Session, game: Game) -> dict:
-    league = db.get(League, game.league_id)
-    sport = db.get(Sport, league.sport_id) if league else None
+def _game_row(game: Game, league: League | None, sport: Sport | None) -> dict:
     return {
         "id": game.id,
         "external_id": game.external_id,
@@ -216,5 +215,40 @@ def catalog_game_view(db: Session, game: Game) -> dict:
         "odds_home": float(game.odds_home) if game.odds_home is not None else None,
         "odds_draw": float(game.odds_draw) if game.odds_draw is not None else None,
         "odds_away": float(game.odds_away) if game.odds_away is not None else None,
+    }
+
+
+def catalog_game_view(db: Session, game: Game) -> dict:
+    league = db.get(League, game.league_id)
+    sport = db.get(Sport, league.sport_id) if league else None
+    return {
+        **_game_row(game, league, sport),
         "markets": default_markets_for_game(game),
     }
+
+
+LeagueSportLookup = dict[int, tuple[League, Sport | None]]
+
+
+def league_sport_lookup(db: Session, games: Sequence[Game]) -> LeagueSportLookup:
+    """Resolve the leagues and sports for a page of games in two queries.
+
+    Per-game ``db.get`` calls hold the pooled connection for the whole list
+    build, which starves the pool under concurrent catalog reads.
+    """
+    league_ids = {game.league_id for game in games}
+    if not league_ids:
+        return {}
+    leagues = db.query(League).filter(League.id.in_(league_ids)).all()
+    sport_ids = {league.sport_id for league in leagues}
+    sports = db.query(Sport).filter(Sport.id.in_(sport_ids)).all() if sport_ids else []
+    sport_by_id = {sport.id: sport for sport in sports}
+    return {
+        league.id: (league, sport_by_id.get(league.sport_id)) for league in leagues
+    }
+
+
+def catalog_game_list_view(game: Game, lookup: LeagueSportLookup) -> dict:
+    """List-shaped view of a game: no markets, no per-row queries."""
+    league, sport = lookup.get(game.league_id, (None, None))
+    return _game_row(game, league, sport)

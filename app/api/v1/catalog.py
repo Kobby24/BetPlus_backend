@@ -1,8 +1,9 @@
-from datetime import date, datetime, timedelta, timezone
-from typing import List
+from datetime import date
+from typing import List, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import inspect
+from fastapi import APIRouter, Depends, HTTPException, Query, status as http_status
+from sqlalchemy import inspect, text
+from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -11,6 +12,7 @@ from app.models.league import League
 from app.models.sport import Sport
 from app.models.sportybet_sync_job import SportyBetSyncJob
 from app.schemas import (
+    GameListOut,
     GameOut,
     LeagueOut,
     SportOut,
@@ -18,7 +20,15 @@ from app.schemas import (
     SportyBetLiveSyncQueuedOut,
 )
 from app.services.audit_service import AuditService
-from app.services.catalog_service import catalog_game_view
+from app.services.catalog_query import (
+    DEFAULT_ALL_WINDOW_DAYS,
+    catalog_games_query,
+)
+from app.services.catalog_service import (
+    catalog_game_list_view,
+    catalog_game_view,
+    league_sport_lookup,
+)
 from app.services.sportybet_live_job import (
     IMPORTANT_SYNC_TYPE,
     LIVE_SYNC_TYPE,
@@ -31,6 +41,9 @@ from app.services.sportybet_live_job import (
 
 router = APIRouter()
 
+DEFAULT_GAMES_LIMIT = 200
+MAX_GAMES_LIMIT = 500
+LIST_STATEMENT_TIMEOUT_MS = 8000
 _SPORTYBET_GAME_COLUMNS = ("external_event_id", "external_game_id")
 
 
@@ -82,21 +95,60 @@ def list_leagues(sport_id: int | None = None, db: Session = Depends(get_db)):
     return q.all()
 
 
-@router.get("/games", response_model=List[GameOut])
+@router.get("/games", response_model=List[GameListOut])
 def list_games(
     live: bool | None = None,
     date: date | None = None,
+    league_id: int | None = None,
+    sport: str | None = None,
+    catalog_status: Literal["live", "upcoming", "all"] | None = Query(
+        default=None, alias="status"
+    ),
+    search: str | None = Query(default=None, max_length=80),
+    window_days: int = Query(DEFAULT_ALL_WINDOW_DAYS, ge=1, le=30),
+    limit: int = Query(DEFAULT_GAMES_LIMIT, ge=1, le=MAX_GAMES_LIMIT),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
-    q = db.query(Game)
-    if date is not None:
-        start_of_day = datetime.combine(date, datetime.min.time(), tzinfo=timezone.utc)
-        start_of_next_day = start_of_day + timedelta(days=1)
-        q = q.filter(Game.starts_at >= start_of_day, Game.starts_at < start_of_next_day)
-    if live is True:
-        q = q.filter(Game.is_live == 1)
-    games = q.order_by(Game.starts_at.asc()).all()
-    return [GameOut.model_validate(catalog_game_view(db, g)) for g in games]
+    """Lightweight fixture list for betting tabs.
+
+    Markets stay on ``/games/{external_id}``. ``status`` maps to the home
+    Live / Today / All tabs; ``live=true`` remains an alias for live-only.
+    """
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(
+            text(f"SET LOCAL statement_timeout = {int(LIST_STATEMENT_TIMEOUT_MS)}")
+        )
+
+    q = catalog_games_query(
+        db,
+        live=live,
+        date=date,
+        league_id=league_id,
+        sport=sport,
+        status=catalog_status,
+        search=search,
+        window_days=window_days,
+    )
+    try:
+        games = q.limit(limit).offset(offset).all()
+    except SQLAlchemyTimeoutError as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="catalog is busy, retry shortly",
+        ) from exc
+    except OperationalError as exc:
+        orig = str(getattr(exc, "orig", exc)).lower()
+        if "timeout" in orig or "canceling statement" in orig:
+            raise HTTPException(
+                status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="catalog is busy, retry shortly",
+            ) from exc
+        raise
+    lookup = league_sport_lookup(db, games)
+    return [
+        GameListOut.model_validate(catalog_game_list_view(g, lookup)) for g in games
+    ]
 
 
 @router.get("/games/{external_id}", response_model=GameOut)
@@ -110,7 +162,7 @@ def get_game(external_id: str, db: Session = Depends(get_db)):
 @router.post(
     "/sync/sportybet",
     response_model=SportyBetLiveSyncQueuedOut,
-    status_code=status.HTTP_202_ACCEPTED,
+    status_code=http_status.HTTP_202_ACCEPTED,
 )
 def enqueue_sportybet_sync(db: Session = Depends(get_db)):
     """Queue the important-events catalog sync for the worker dyno.
@@ -163,7 +215,7 @@ def get_current_sportybet_sync_job(db: Session = Depends(get_db)):
 @router.post(
     "/sync/sportybet/live",
     response_model=SportyBetLiveSyncQueuedOut,
-    status_code=status.HTTP_202_ACCEPTED,
+    status_code=http_status.HTTP_202_ACCEPTED,
 )
 def enqueue_sportybet_live_sync(db: Session = Depends(get_db)):
     missing = missing_live_sync_infrastructure(db.get_bind())

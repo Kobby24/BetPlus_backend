@@ -10,7 +10,7 @@ from app.db.schema_status import reset_schema_status_cache
 
 POSTGRES_POOL_SIZE = 3
 POSTGRES_MAX_OVERFLOW = 2
-POSTGRES_POOL_TIMEOUT = 30
+POSTGRES_POOL_TIMEOUT = 5
 POSTGRES_POOL_RECYCLE = 1800
 
 
