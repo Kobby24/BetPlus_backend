@@ -449,9 +449,38 @@ def test_moolre_http_200_failed_envelope_returns_structured_400(client, monkeypa
     )
     assert resp.status_code == 400
     detail = _detail(resp)
-    assert detail["message"] == "Payment provider rejected the request"
+    assert detail["message"] == "Invalid channel"
     assert detail["code"] == "PAYMENT_FAILED"
     assert str(detail.get("reference") or "").startswith("bp_")
+    me = client.get("/api/v1/auth/me", headers=auth_headers(token)).json()
+    assert me["balance"] == 0
+
+
+def test_moolre_http_200_in01_surfaces_live_credential_guidance(client, monkeypatch):
+    _configure_moolre(monkeypatch)
+
+    def fake_post(url, json, headers, timeout):
+        return DummyResponse(
+            {
+                "status": 0,
+                "code": "IN01",
+                "message": "Invalid account or credentials",
+                "data": None,
+                "go": None,
+            }
+        )
+
+    monkeypatch.setattr("app.services.moolre_service.httpx.post", fake_post)
+    token = register_and_token(client, "moolre-in01@example.com")
+    resp = client.post(
+        "/api/v1/payments/deposits",
+        json={"amount": 20, "channel": "mtn", "phone": "0241234567"},
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 400
+    detail = _detail(resp)
+    assert "live API user" in detail["message"]
+    assert detail["code"] == "PAYMENT_FAILED"
     me = client.get("/api/v1/auth/me", headers=auth_headers(token)).json()
     assert me["balance"] == 0
 

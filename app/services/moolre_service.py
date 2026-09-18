@@ -64,7 +64,36 @@ SAFE_PROVIDER_MESSAGES = {
     "TP13": "Payment reference was already used. Please retry.",
     "TP14": "Phone verification is required before this payment can continue.",
     "TR013": "Transfer reference was already used. Please retry.",
+    "IN01": (
+        "Moolre rejected this live request. Confirm live API user, "
+        "public key, and account number."
+    ),
 }
+_SECRETISH_MESSAGE_MARKERS = ("key", "token", "secret", "password", "pin", "authorization")
+
+
+def _safe_message_text(raw: object) -> str:
+    if isinstance(raw, list):
+        parts = [str(item).strip() for item in raw if str(item).strip()]
+        text = " ".join(parts)
+    elif raw is None:
+        text = ""
+    else:
+        text = str(raw).strip()
+    return " ".join(text.split())[:160]
+
+
+def public_provider_message(
+    code: object, body: dict[str, Any] | None, fallback: str
+) -> str:
+    mapped = SAFE_PROVIDER_MESSAGES.get(str(code or "").strip().upper())
+    if mapped:
+        return mapped
+    text = _safe_message_text((body or {}).get("message"))
+    lowered = text.lower()
+    if text and not any(marker in lowered for marker in _SECRETISH_MESSAGE_MARKERS):
+        return text
+    return fallback
 
 
 class MoolreError(Exception):
@@ -214,16 +243,19 @@ class MoolreService:
         if not isinstance(body, dict):
             raise MoolreError("Payment provider returned an invalid response")
         logger.info(
-            "moolre.response path=%s http=%s status=%s code=%s",
+            "moolre.response path=%s http=%s status=%s code=%s message=%s",
             path,
             response.status_code,
             body.get("status"),
             body.get("code"),
+            _safe_message_text(body.get("message")) or None,
         )
         if response.status_code >= 400:
             code = body.get("code")
             raise MoolreError(
-                safe_provider_message(code, "Payment provider rejected the request"),
+                public_provider_message(
+                    code, body, "Payment provider rejected the request"
+                ),
                 code=str(code) if code is not None else None,
             )
         return body
@@ -253,14 +285,24 @@ class MoolreService:
         )
         if not envelope_accepted(body):
             logger.warning(
-                "moolre.collection_rejected ref=%s status=%s code=%s",
+                "moolre.collection_rejected ref=%s status=%s code=%s message=%s "
+                "env=%s channel=%s currency=%s has_user=%s has_pubkey=%s has_account=%s",
                 payment.provider_ref,
                 body.get("status"),
                 body.get("code"),
+                _safe_message_text(body.get("message")) or None,
+                settings.moolre_env,
+                payload.get("channel"),
+                payload.get("currency"),
+                bool(settings.moolre_api_user),
+                bool(settings.moolre_public_key),
+                bool(settings.moolre_account_number),
             )
             code = body.get("code")
             raise MoolreError(
-                safe_provider_message(code, "Payment provider rejected the request"),
+                public_provider_message(
+                    code, body, "Payment provider rejected the request"
+                ),
                 code=str(code) if code is not None else None,
             )
         if envelope_code(body) == "TP14":
@@ -301,14 +343,23 @@ class MoolreService:
         )
         if not envelope_accepted(body):
             logger.warning(
-                "moolre.transfer_rejected ref=%s status=%s code=%s",
+                "moolre.transfer_rejected ref=%s status=%s code=%s message=%s "
+                "env=%s channel=%s has_user=%s has_key=%s has_account=%s",
                 payment.provider_ref,
                 body.get("status"),
                 body.get("code"),
+                _safe_message_text(body.get("message")) or None,
+                settings.moolre_env,
+                payload.get("channel"),
+                bool(settings.moolre_api_user),
+                bool(settings.moolre_api_key),
+                bool(settings.moolre_account_number),
             )
             code = body.get("code")
             raise MoolreError(
-                safe_provider_message(code, "Payout provider rejected the request"),
+                public_provider_message(
+                    code, body, "Payout provider rejected the request"
+                ),
                 code=str(code) if code is not None else None,
             )
         logger.info(
