@@ -17,6 +17,13 @@ def _intent_out(intent) -> PaymentIntentOut:
     return PaymentIntentOut.model_validate(intent)
 
 
+def _payment_error_detail(exc: PaymentError) -> dict[str, str]:
+    detail = {"message": str(exc), "code": "PAYMENT_FAILED"}
+    if exc.reference:
+        detail["reference"] = exc.reference
+    return detail
+
+
 @router.post("/deposits", response_model=PaymentIntentOut, status_code=201)
 def initiate_deposit(
     payload: PaymentInitiateIn,
@@ -64,7 +71,7 @@ def initiate_deposit(
             db, user_id=current_user.id, key=idempotency_key
         )
         db.commit()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=_payment_error_detail(exc)) from exc
 
 
 @router.post("/withdrawals", response_model=PaymentIntentOut, status_code=201)
@@ -113,7 +120,7 @@ def initiate_withdrawal(
             db, user_id=current_user.id, key=idempotency_key
         )
         db.commit()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=_payment_error_detail(exc)) from exc
     except Exception as exc:
         IdempotencyService.clear_in_progress(
             db, user_id=current_user.id, key=idempotency_key
@@ -141,7 +148,7 @@ def get_payment(
     except PaymentError as exc:
         if str(exc) == "not_found":
             raise HTTPException(status_code=404, detail="Payment not found") from exc
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=_payment_error_detail(exc)) from exc
     return intent
 
 

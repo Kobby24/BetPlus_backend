@@ -29,7 +29,9 @@ PENDING_STATUSES = frozenset({"pending", "processing"})
 
 
 class PaymentError(Exception):
-    pass
+    def __init__(self, message: str, *, reference: str | None = None):
+        super().__init__(message)
+        self.reference = reference
 
 
 def _new_ref() -> str:
@@ -92,10 +94,10 @@ class PaymentService:
             except MoolreError as exc:
                 intent.status = "failed"
                 intent.completed_at = _now()
-                intent.extra = {"error": str(exc)}
+                intent.extra = {"error": str(exc), "code": exc.code}
                 db.add(intent)
                 db.commit()
-                raise PaymentError(str(exc)) from exc
+                raise PaymentError(str(exc), reference=intent.provider_ref) from exc
             db.add(intent)
             db.commit()
             db.refresh(intent)
@@ -414,7 +416,7 @@ class PaymentService:
                 body = MoolreService.initiate_transfer(intent, receiver_phone=receiver)
             except MoolreError as exc:
                 PaymentService._fail_intent(db, intent, commit=True)
-                raise PaymentError(str(exc)) from exc
+                raise PaymentError(str(exc), reference=intent.provider_ref) from exc
             extra = _extra(intent)
             extra["provider_response_code"] = body.get("code")
             intent.extra = extra

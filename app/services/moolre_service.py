@@ -56,6 +56,10 @@ TRANSFER_CHANNELS = {
     "7": "AT",
 }
 
+# Moolre collection uses 13=MTN; transfers use 1=MTN. Named values are rejected.
+COLLECTION_CHANNEL_CODES = {"MTN": "13", "TELECEL": "6", "AT": "7"}
+TRANSFER_CHANNEL_CODES = {"MTN": "1", "TELECEL": "6", "AT": "7"}
+
 SAFE_PROVIDER_MESSAGES = {
     "TP13": "Payment reference was already used. Please retry.",
     "TP14": "Phone verification is required before this payment can continue.",
@@ -75,9 +79,16 @@ def _normalize_key(value: str | None) -> str:
 
 
 def envelope_accepted(body: dict[str, Any] | None) -> bool:
+    """HTTP 200 is not enough; Moolre uses status 1 for an accepted envelope."""
     if not isinstance(body, dict):
         return False
-    return body.get("status") in {1, "1", True}
+    return body.get("status") in {1, "1", True, 1.0}
+
+
+def envelope_code(body: dict[str, Any] | None) -> str:
+    if not isinstance(body, dict):
+        return ""
+    return str(body.get("code") or "").strip().upper()
 
 
 def txstatus_value(data: dict[str, Any] | None) -> object:
@@ -138,6 +149,10 @@ class MoolreService:
         raise MoolreError("Unsupported mobile money network")
 
     @staticmethod
+    def collection_channel_code(channel: str | None) -> str:
+        return COLLECTION_CHANNEL_CODES[MoolreService.collection_channel(channel)]
+
+    @staticmethod
     def transfer_channel(channel: str | None) -> str:
         normalized = _normalize_key(channel)
         mapped = TRANSFER_CHANNELS.get(normalized)
@@ -146,6 +161,10 @@ class MoolreService:
         if (channel or "").strip().upper() in {"MTN", "TELECEL", "AT"}:
             return (channel or "").strip().upper()
         raise MoolreError("Unsupported mobile money network")
+
+    @staticmethod
+    def transfer_channel_code(channel: str | None) -> str:
+        return TRANSFER_CHANNEL_CODES[MoolreService.transfer_channel(channel)]
 
     @staticmethod
     def _auth_headers(*, private: bool = False) -> dict[str, str]:
@@ -194,6 +213,13 @@ class MoolreService:
             raise MoolreError("Payment provider returned an invalid response") from exc
         if not isinstance(body, dict):
             raise MoolreError("Payment provider returned an invalid response")
+        logger.info(
+            "moolre.response path=%s http=%s status=%s code=%s",
+            path,
+            response.status_code,
+            body.get("status"),
+            body.get("code"),
+        )
         if response.status_code >= 400:
             code = body.get("code")
             raise MoolreError(
@@ -210,7 +236,7 @@ class MoolreService:
         account = MoolreService._require_account_number()
         payload: dict[str, Any] = {
             "type": 1,
-            "channel": MoolreService.collection_channel(payment.channel),
+            "channel": MoolreService.collection_channel_code(payment.channel),
             "currency": payment.currency or settings.payment_currency,
             "payer": MoolreService.normalize_phone(payer_phone),
             "amount": str(to_decimal(payment.amount)),
@@ -226,13 +252,26 @@ class MoolreService:
             MoolreService._auth_headers(private=False),
         )
         if not envelope_accepted(body):
+            logger.warning(
+                "moolre.collection_rejected ref=%s status=%s code=%s",
+                payment.provider_ref,
+                body.get("status"),
+                body.get("code"),
+            )
             code = body.get("code")
             raise MoolreError(
                 safe_provider_message(code, "Payment provider rejected the request"),
                 code=str(code) if code is not None else None,
             )
-        if str(body.get("code") or "").upper() == "TP14":
-            raise MoolreError(safe_provider_message("TP14", "Phone verification is required"))
+        if envelope_code(body) == "TP14":
+            logger.warning(
+                "moolre.collection_otp_required ref=%s code=TP14",
+                payment.provider_ref,
+            )
+            raise MoolreError(
+                safe_provider_message("TP14", "Phone verification is required"),
+                code="TP14",
+            )
         logger.info(
             "moolre.collection_initiated ref=%s code=%s",
             payment.provider_ref,
@@ -248,7 +287,7 @@ class MoolreService:
         account = MoolreService._require_account_number()
         payload = {
             "type": 1,
-            "channel": MoolreService.transfer_channel(payment.channel),
+            "channel": MoolreService.transfer_channel_code(payment.channel),
             "currency": payment.currency or settings.payment_currency,
             "amount": str(to_decimal(payment.amount)),
             "receiver": MoolreService.normalize_phone(receiver_phone),
@@ -261,6 +300,12 @@ class MoolreService:
             MoolreService._auth_headers(private=True),
         )
         if not envelope_accepted(body):
+            logger.warning(
+                "moolre.transfer_rejected ref=%s status=%s code=%s",
+                payment.provider_ref,
+                body.get("status"),
+                body.get("code"),
+            )
             code = body.get("code")
             raise MoolreError(
                 safe_provider_message(code, "Payout provider rejected the request"),

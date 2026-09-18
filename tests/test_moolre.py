@@ -58,9 +58,12 @@ def test_channel_and_phone_mapping():
     from app.services.moolre_service import MoolreService
 
     assert MoolreService.collection_channel("mtn") == "MTN"
-    assert MoolreService.collection_channel("telecel") == "TELECEL"
-    assert MoolreService.collection_channel("airteltigo") == "AT"
+    assert MoolreService.collection_channel_code("mtn") == "13"
+    assert MoolreService.collection_channel_code("telecel") == "6"
+    assert MoolreService.collection_channel_code("airteltigo") == "7"
     assert MoolreService.transfer_channel("mtn") == "MTN"
+    assert MoolreService.transfer_channel_code("mtn") == "1"
+    assert MoolreService.transfer_channel_code("telecel") == "6"
     assert MoolreService.normalize_phone("0241234567") == "0241234567"
     assert MoolreService.normalize_phone("+233241234567") == "0241234567"
     with pytest.raises(Exception):
@@ -90,7 +93,7 @@ def test_moolre_deposit_initiation_uses_sandbox_contract(client, monkeypatch):
     assert body["provider_ref"].startswith("bp_")
     assert calls[0]["url"] == "https://sandbox.moolre.com/open/transact/payment"
     assert calls[0]["json"]["type"] == 1
-    assert calls[0]["json"]["channel"] == "MTN"
+    assert calls[0]["json"]["channel"] == "13"
     assert calls[0]["json"]["payer"] == "0241234567"
     assert calls[0]["json"]["amount"] == "25.00"
     assert calls[0]["json"]["accountnumber"] == ACCOUNT
@@ -119,7 +122,7 @@ def test_moolre_telecel_and_at_channels(client, monkeypatch):
         )
         assert resp.status_code == 201
         assert resp.json()["status"] == "pending"
-    assert captured == ["TELECEL", "AT"]
+    assert captured == ["6", "7"]
 
 
 def test_moolre_rejects_invalid_network_and_amount(client, monkeypatch):
@@ -414,3 +417,174 @@ def test_deposit_idempotency_key_replays(client, monkeypatch):
     assert first.status_code == 201
     assert second.status_code == 201
     assert first.json()["id"] == second.json()["id"]
+
+
+def _detail(resp):
+    payload = resp.json()["detail"]
+    if isinstance(payload, dict):
+        return payload
+    return {"message": str(payload)}
+
+
+def test_moolre_http_200_failed_envelope_returns_structured_400(client, monkeypatch):
+    _configure_moolre(monkeypatch)
+
+    def fake_post(url, json, headers, timeout):
+        return DummyResponse(
+            {
+                "status": 0,
+                "code": "CH01",
+                "message": "Invalid channel",
+                "data": None,
+                "go": None,
+            }
+        )
+
+    monkeypatch.setattr("app.services.moolre_service.httpx.post", fake_post)
+    token = register_and_token(client, "moolre-env0@example.com")
+    resp = client.post(
+        "/api/v1/payments/deposits",
+        json={"amount": 20, "channel": "mtn", "phone": "0241234567"},
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 400
+    detail = _detail(resp)
+    assert detail["message"] == "Payment provider rejected the request"
+    assert detail["code"] == "PAYMENT_FAILED"
+    assert str(detail.get("reference") or "").startswith("bp_")
+    me = client.get("/api/v1/auth/me", headers=auth_headers(token)).json()
+    assert me["balance"] == 0
+
+
+def test_moolre_http_200_tp14_requires_phone_verification(client, monkeypatch):
+    _configure_moolre(monkeypatch)
+
+    def fake_post(url, json, headers, timeout):
+        return DummyResponse(
+            {
+                "status": 1,
+                "code": "TP14",
+                "message": "Please complete the verification process sent to you via SMS and try again.",
+                "data": "all",
+                "go": None,
+            }
+        )
+
+    monkeypatch.setattr("app.services.moolre_service.httpx.post", fake_post)
+    token = register_and_token(client, "moolre-tp14@example.com")
+    resp = client.post(
+        "/api/v1/payments/deposits",
+        json={"amount": 20, "channel": "mtn", "phone": "0241234567"},
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 400
+    detail = _detail(resp)
+    assert "Phone verification" in detail["message"]
+    me = client.get("/api/v1/auth/me", headers=auth_headers(token)).json()
+    assert me["balance"] == 0
+
+
+def test_moolre_deposit_unauthenticated(client, monkeypatch):
+    _configure_moolre(monkeypatch)
+    resp = client.post(
+        "/api/v1/payments/deposits",
+        json={"amount": 20, "channel": "mtn", "phone": "0241234567"},
+    )
+    assert resp.status_code == 401
+
+
+def test_moolre_withdrawal_uses_numeric_transfer_channel(client, monkeypatch):
+    _configure_moolre(monkeypatch)
+    from app.db.session import SessionLocal
+    from app.models.user import User
+
+    token = register_and_token(client, "moolre-wdch@example.com")
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == "moolre-wdch@example.com").first()
+        user.balance = Decimal("50.00")
+        db.add(user)
+        db.commit()
+    finally:
+        db.close()
+
+    calls = []
+
+    def fake_post(url, json, headers, timeout):
+        calls.append({"url": url, "json": json})
+        return DummyResponse({"status": 1, "code": "OBGH01", "data": {}})
+
+    monkeypatch.setattr("app.services.moolre_service.httpx.post", fake_post)
+    resp = client.post(
+        "/api/v1/payments/withdrawals",
+        json={"amount": 10, "channel": "mtn", "destination": "0241234567"},
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 201
+    assert resp.json()["status"] == "pending"
+    assert calls[0]["json"]["channel"] == "1"
+    assert calls[0]["url"].endswith("/open/transact/transfer")
+    me = client.get("/api/v1/auth/me", headers=auth_headers(token)).json()
+    assert me["balance"] == 40
+
+
+def test_moolre_status_unknown_and_unauthorized(client, monkeypatch):
+    _configure_moolre(monkeypatch)
+    monkeypatch.setattr(
+        "app.services.moolre_service.httpx.post",
+        lambda *a, **k: DummyResponse({"status": 1, "code": "TR099", "data": "x"}),
+    )
+    owner = register_and_token(client, "moolre-st-owner@example.com")
+    other = register_and_token(client, "moolre-st-other@example.com")
+    missing = client.get("/api/v1/payments/bp_missing", headers=auth_headers(owner))
+    assert missing.status_code == 404
+    created = client.post(
+        "/api/v1/payments/deposits",
+        json={"amount": 10, "channel": "mtn", "phone": "0241234567"},
+        headers=auth_headers(owner),
+    )
+    reference = created.json()["provider_ref"]
+    denied = client.get(f"/api/v1/payments/{reference}", headers=auth_headers(other))
+    assert denied.status_code == 404
+    client.cookies.clear()
+    anon = client.get(f"/api/v1/payments/{reference}")
+    assert anon.status_code == 401
+
+
+def test_moolre_http_200_failed_txstatus_does_not_credit(client, monkeypatch):
+    _configure_moolre(monkeypatch)
+
+    def fake_post(url, json, headers, timeout):
+        if url.endswith("/payment"):
+            return DummyResponse({"status": 1, "code": "TR099", "data": "x"})
+        return DummyResponse(_success_status(json["id"], txstatus=2))
+
+    monkeypatch.setattr("app.services.moolre_service.httpx.post", fake_post)
+    token = register_and_token(client, "moolre-failtx@example.com")
+    created = client.post(
+        "/api/v1/payments/deposits",
+        json={"amount": 25, "channel": "mtn", "phone": "0241234567"},
+        headers=auth_headers(token),
+    )
+    reference = created.json()["provider_ref"]
+    status = client.get(f"/api/v1/payments/{reference}", headers=auth_headers(token))
+    assert status.status_code == 200
+    assert status.json()["status"] == "failed"
+    me = client.get("/api/v1/auth/me", headers=auth_headers(token)).json()
+    assert me["balance"] == 0
+
+
+def test_moolre_webhook_unknown_reference(client, monkeypatch):
+    _configure_moolre(monkeypatch)
+    payload = {
+        "status": 1,
+        "code": "P01",
+        "data": {
+            "txstatus": 1,
+            "externalref": "bp_unknown",
+            "secret": SECRET,
+            "amount": "10.00",
+        },
+    }
+    resp = client.post("/api/v1/payments/webhook", content=json.dumps(payload).encode())
+    assert resp.status_code == 400
