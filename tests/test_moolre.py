@@ -510,6 +510,7 @@ def test_moolre_http_200_tp14_requires_phone_verification(client, monkeypatch):
     body = resp.json()
     assert body["status"] == "pending"
     assert body["otp_required"] is True
+    assert body["next_action"] == "otp"
     reference = body["provider_ref"]
     status = client.get(f"/api/v1/payments/{reference}", headers=auth_headers(token))
     assert status.status_code == 200

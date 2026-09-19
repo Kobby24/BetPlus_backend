@@ -15,8 +15,12 @@ router = APIRouter()
 
 def _intent_out(intent) -> PaymentIntentOut:
     extra = dict(intent.extra or {})
+    otp_required = bool(extra.get("otp_required"))
     return PaymentIntentOut.model_validate(intent).model_copy(
-        update={"otp_required": bool(extra.get("otp_required"))}
+        update={
+            "otp_required": otp_required,
+            "next_action": "otp" if otp_required else None,
+        }
     )
 
 

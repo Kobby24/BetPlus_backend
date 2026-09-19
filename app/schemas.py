@@ -362,5 +362,6 @@ class PaymentIntentOut(BaseModel):
     channel: str | None = None
     authorization_url: str | None = None
     otp_required: bool = False
+    next_action: str | None = None
     created_at: datetime | None = None
     completed_at: datetime | None = None
