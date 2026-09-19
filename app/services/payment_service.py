@@ -88,7 +88,7 @@ class PaymentService:
 
         if settings.payments_mode == "moolre":
             try:
-                intent.extra = PaymentService._initiate_collection_with_retry(
+                body = PaymentService._initiate_collection_with_retry(
                     intent, payer_phone=payer_phone
                 )
             except MoolreError as exc:
@@ -98,14 +98,16 @@ class PaymentService:
                 db.add(intent)
                 db.commit()
                 raise PaymentError(str(exc), reference=intent.provider_ref) from exc
+            intent.extra = PaymentService._collection_extra(body, payer_phone)
             db.add(intent)
             db.commit()
             db.refresh(intent)
             logger.info(
-                "payment.deposit_pending id=%s ref=%s user=%s",
+                "payment.deposit_pending id=%s ref=%s user=%s otp_required=%s",
                 intent.id,
                 intent.provider_ref,
                 user_id,
+                bool((intent.extra or {}).get("otp_required")),
             )
             return intent
 
@@ -118,15 +120,122 @@ class PaymentService:
 
     @staticmethod
     def _initiate_collection_with_retry(
-        intent: PaymentIntent, *, payer_phone: str | None
+        intent: PaymentIntent,
+        *,
+        payer_phone: str | None,
+        otpcode: str | None = None,
     ) -> dict[str, Any]:
         try:
-            return MoolreService.initiate_collection(intent, payer_phone=payer_phone)
+            return MoolreService.initiate_collection(
+                intent, payer_phone=payer_phone, otpcode=otpcode
+            )
         except MoolreError as exc:
             if exc.code != "TP13":
                 raise
             intent.provider_ref = _new_ref()
-            return MoolreService.initiate_collection(intent, payer_phone=payer_phone)
+            return MoolreService.initiate_collection(
+                intent, payer_phone=payer_phone, otpcode=otpcode
+            )
+
+    @staticmethod
+    def _collection_extra(
+        body: dict[str, Any], payer_phone: str | None
+    ) -> dict[str, Any]:
+        extra = dict(body)
+        extra["payer_phone"] = MoolreService.normalize_phone(payer_phone)
+        extra["otp_required"] = str(body.get("code") or "").upper() == "TP14"
+        extra["provider_response_code"] = body.get("code")
+        return extra
+
+    @staticmethod
+    def confirm_deposit_otp(
+        db: Session,
+        *,
+        reference: str,
+        user_id: str,
+        otpcode: str,
+        is_admin: bool = False,
+    ) -> PaymentIntent:
+        settings = get_settings()
+        if settings.payments_mode != "moolre":
+            raise PaymentError("Phone verification is not required")
+
+        intent = PaymentService.get_by_ref(db, reference)
+        if not intent or (intent.user_id != user_id and not is_admin):
+            raise PaymentError("not_found")
+        extra = _extra(intent)
+        if intent.kind != "deposit" or intent.status != "pending" or not extra.get(
+            "otp_required"
+        ):
+            raise PaymentError("This payment is not waiting for a verification code")
+
+        digits = "".join(ch for ch in str(otpcode) if ch.isdigit())
+        if len(digits) < 4 or len(digits) > 10:
+            raise PaymentError(
+                "Enter the SMS verification code", reference=intent.provider_ref
+            )
+
+        phone = str(extra.get("payer_phone") or "")
+        try:
+            body = PaymentService._initiate_collection_with_retry(
+                intent, payer_phone=phone, otpcode=digits
+            )
+        except MoolreError as exc:
+            extra["code"] = exc.code
+            extra["otp_required"] = True
+            extra["error"] = str(exc)
+            intent.extra = extra
+            db.add(intent)
+            db.commit()
+            raise PaymentError(str(exc), reference=intent.provider_ref) from exc
+
+        code = str(body.get("code") or "").upper()
+        if code == "TP14":
+            extra.update(PaymentService._collection_extra(body, phone))
+            extra["otp_required"] = True
+            intent.extra = extra
+            db.add(intent)
+            db.commit()
+            db.refresh(intent)
+            raise PaymentError(
+                "That verification code is incorrect or expired. Try again.",
+                reference=intent.provider_ref,
+            )
+
+        extra.update(PaymentService._collection_extra(body, phone))
+        extra["otp_required"] = False
+        extra["otp_verified"] = True
+        if code == "TP17":
+            try:
+                follow = PaymentService._initiate_collection_with_retry(
+                    intent, payer_phone=phone
+                )
+            except MoolreError as exc:
+                extra["otp_required"] = True
+                extra["error"] = str(exc)
+                extra["code"] = exc.code
+                intent.extra = extra
+                db.add(intent)
+                db.commit()
+                raise PaymentError(str(exc), reference=intent.provider_ref) from exc
+            extra.update(PaymentService._collection_extra(follow, phone))
+            if extra.get("otp_required"):
+                intent.extra = extra
+                db.add(intent)
+                db.commit()
+                db.refresh(intent)
+                return intent
+        intent.extra = extra
+        db.add(intent)
+        db.commit()
+        db.refresh(intent)
+        logger.info(
+            "payment.deposit_otp_verified id=%s ref=%s code=%s",
+            intent.id,
+            intent.provider_ref,
+            extra.get("provider_response_code"),
+        )
+        return intent
 
     @staticmethod
     def complete_intent(
@@ -594,6 +703,8 @@ class PaymentService:
         intent = PaymentService.get_by_ref(db, reference)
         if not intent or (intent.user_id != user_id and not is_admin):
             raise PaymentError("not_found")
+        if _extra(intent).get("otp_required"):
+            return intent
         if (
             get_settings().payments_mode == "moolre"
             and intent.status in PENDING_STATUSES

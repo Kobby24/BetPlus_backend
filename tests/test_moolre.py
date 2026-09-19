@@ -506,11 +506,127 @@ def test_moolre_http_200_tp14_requires_phone_verification(client, monkeypatch):
         json={"amount": 20, "channel": "mtn", "phone": "0241234567"},
         headers=auth_headers(token),
     )
-    assert resp.status_code == 400
-    detail = _detail(resp)
-    assert "Phone verification" in detail["message"]
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["status"] == "pending"
+    assert body["otp_required"] is True
+    reference = body["provider_ref"]
+    status = client.get(f"/api/v1/payments/{reference}", headers=auth_headers(token))
+    assert status.status_code == 200
+    assert status.json()["otp_required"] is True
     me = client.get("/api/v1/auth/me", headers=auth_headers(token)).json()
     assert me["balance"] == 0
+
+
+def test_moolre_tp14_otp_then_prompt(client, monkeypatch):
+    _configure_moolre(monkeypatch)
+    calls = []
+
+    def fake_post(url, json, headers, timeout):
+        calls.append(json)
+        if json.get("otpcode") == "123456":
+            return DummyResponse({"status": 1, "code": "TR099", "data": "ok"})
+        return DummyResponse(
+            {
+                "status": 1,
+                "code": "TP14",
+                "message": "Please complete the verification process sent to you via SMS and try again.",
+                "data": "all",
+            }
+        )
+
+    monkeypatch.setattr("app.services.moolre_service.httpx.post", fake_post)
+    token = register_and_token(client, "moolre-otp@example.com")
+    created = client.post(
+        "/api/v1/payments/deposits",
+        json={"amount": 20, "channel": "mtn", "phone": "0241234567"},
+        headers=auth_headers(token),
+    )
+    reference = created.json()["provider_ref"]
+    bad = client.post(
+        f"/api/v1/payments/{reference}/otp",
+        json={"otpcode": "000000"},
+        headers=auth_headers(token),
+    )
+    assert bad.status_code == 400
+    assert created.json()["otp_required"] is True
+    ok = client.post(
+        f"/api/v1/payments/{reference}/otp",
+        json={"otpcode": "123456"},
+        headers=auth_headers(token),
+    )
+    assert ok.status_code == 200
+    assert ok.json()["otp_required"] is False
+    assert ok.json()["status"] == "pending"
+    assert any(call.get("otpcode") == "123456" for call in calls)
+    me = client.get("/api/v1/auth/me", headers=auth_headers(token)).json()
+    assert me["balance"] == 0
+
+
+def test_moolre_tp14_then_tp17_then_prompt(client, monkeypatch):
+    _configure_moolre(monkeypatch)
+    seen = {"otp": 0, "follow": 0}
+
+    def fake_post(url, json, headers, timeout):
+        if json.get("otpcode"):
+            seen["otp"] += 1
+            return DummyResponse({"status": 1, "code": "TP17", "data": "verified"})
+        if seen["otp"]:
+            seen["follow"] += 1
+            return DummyResponse({"status": 1, "code": "TR099", "data": "ok"})
+        return DummyResponse({"status": 1, "code": "TP14", "data": "all"})
+
+    monkeypatch.setattr("app.services.moolre_service.httpx.post", fake_post)
+    token = register_and_token(client, "moolre-tp17@example.com")
+    created = client.post(
+        "/api/v1/payments/deposits",
+        json={"amount": 15, "channel": "mtn", "phone": "0241234567"},
+        headers=auth_headers(token),
+    )
+    reference = created.json()["provider_ref"]
+    ok = client.post(
+        f"/api/v1/payments/{reference}/otp",
+        json={"otpcode": "654321"},
+        headers=auth_headers(token),
+    )
+    assert ok.status_code == 200
+    assert ok.json()["otp_required"] is False
+    assert seen["otp"] == 1
+    assert seen["follow"] == 1
+
+
+def test_moolre_otp_unauthorized_and_not_waiting(client, monkeypatch):
+    _configure_moolre(monkeypatch)
+    monkeypatch.setattr(
+        "app.services.moolre_service.httpx.post",
+        lambda *a, **k: DummyResponse({"status": 1, "code": "TR099", "data": "x"}),
+    )
+    owner = register_and_token(client, "moolre-otp-owner@example.com")
+    other = register_and_token(client, "moolre-otp-other@example.com")
+    created = client.post(
+        "/api/v1/payments/deposits",
+        json={"amount": 10, "channel": "mtn", "phone": "0241234567"},
+        headers=auth_headers(owner),
+    )
+    reference = created.json()["provider_ref"]
+    denied = client.post(
+        f"/api/v1/payments/{reference}/otp",
+        json={"otpcode": "123456"},
+        headers=auth_headers(other),
+    )
+    assert denied.status_code == 404
+    not_waiting = client.post(
+        f"/api/v1/payments/{reference}/otp",
+        json={"otpcode": "123456"},
+        headers=auth_headers(owner),
+    )
+    assert not_waiting.status_code == 400
+    client.cookies.clear()
+    anon = client.post(
+        f"/api/v1/payments/{reference}/otp",
+        json={"otpcode": "123456"},
+    )
+    assert anon.status_code == 401
 
 
 def test_moolre_deposit_unauthenticated(client, monkeypatch):

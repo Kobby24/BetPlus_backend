@@ -344,6 +344,10 @@ class PaymentInitiateIn(BaseModel):
     destination: str | None = Field(default=None, max_length=255)
 
 
+class PaymentOtpIn(BaseModel):
+    otpcode: str = Field(min_length=4, max_length=16)
+
+
 class PaymentIntentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -357,5 +361,6 @@ class PaymentIntentOut(BaseModel):
     status: str
     channel: str | None = None
     authorization_url: str | None = None
+    otp_required: bool = False
     created_at: datetime | None = None
     completed_at: datetime | None = None

@@ -68,6 +68,7 @@ SAFE_PROVIDER_MESSAGES = {
         "Moolre rejected this live request. Confirm live API user, "
         "public key, and account number."
     ),
+    "TP16": "That verification code is incorrect. Try again.",
 }
 _SECRETISH_MESSAGE_MARKERS = ("key", "token", "secret", "password", "pin", "authorization")
 
@@ -262,7 +263,10 @@ class MoolreService:
 
     @staticmethod
     def initiate_collection(
-        payment: PaymentIntent, *, payer_phone: str | None = None
+        payment: PaymentIntent,
+        *,
+        payer_phone: str | None = None,
+        otpcode: str | None = None,
     ) -> dict[str, Any]:
         settings = get_settings()
         account = MoolreService._require_account_number()
@@ -275,7 +279,10 @@ class MoolreService:
             "externalref": payment.provider_ref,
             "accountnumber": account,
         }
-        if settings.moolre_env == "sandbox":
+        digits = "".join(ch for ch in str(otpcode or "") if ch.isdigit())
+        if digits:
+            payload["otpcode"] = digits
+        elif settings.moolre_env == "sandbox":
             payload["skipotp"] = True
 
         body = MoolreService._post(
@@ -306,14 +313,11 @@ class MoolreService:
                 code=str(code) if code is not None else None,
             )
         if envelope_code(body) == "TP14":
-            logger.warning(
+            logger.info(
                 "moolre.collection_otp_required ref=%s code=TP14",
                 payment.provider_ref,
             )
-            raise MoolreError(
-                safe_provider_message("TP14", "Phone verification is required"),
-                code="TP14",
-            )
+            return body
         logger.info(
             "moolre.collection_initiated ref=%s code=%s",
             payment.provider_ref,

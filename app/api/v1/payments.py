@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.schemas import PaymentInitiateIn, PaymentIntentOut
+from app.schemas import PaymentInitiateIn, PaymentIntentOut, PaymentOtpIn
 from app.services.idempotency_service import IdempotencyService
 from app.services.payment_service import PaymentError, PaymentService
 from app.services.rate_limit import enforce_rate_limit
@@ -14,7 +14,10 @@ router = APIRouter()
 
 
 def _intent_out(intent) -> PaymentIntentOut:
-    return PaymentIntentOut.model_validate(intent)
+    extra = dict(intent.extra or {})
+    return PaymentIntentOut.model_validate(intent).model_copy(
+        update={"otp_required": bool(extra.get("otp_required"))}
+    )
 
 
 def _payment_error_detail(exc: PaymentError) -> dict[str, str]:
@@ -129,6 +132,29 @@ def initiate_withdrawal(
         raise HTTPException(status_code=400, detail="Withdrawal could not be processed") from exc
 
 
+@router.post("/{reference}/otp", response_model=PaymentIntentOut)
+def confirm_deposit_otp(
+    reference: str,
+    payload: PaymentOtpIn,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    enforce_rate_limit(bucket=f"pay:{current_user.id}", limit=20, window_seconds=60)
+    try:
+        intent = PaymentService.confirm_deposit_otp(
+            db,
+            reference=reference,
+            user_id=current_user.id,
+            otpcode=payload.otpcode,
+            is_admin=bool(current_user.is_admin),
+        )
+    except PaymentError as exc:
+        if str(exc) == "not_found":
+            raise HTTPException(status_code=404, detail="Payment not found") from exc
+        raise HTTPException(status_code=400, detail=_payment_error_detail(exc)) from exc
+    return _intent_out(intent)
+
+
 @router.get("/{reference}", response_model=PaymentIntentOut)
 def get_payment(
     reference: str,
@@ -149,7 +175,7 @@ def get_payment(
         if str(exc) == "not_found":
             raise HTTPException(status_code=404, detail="Payment not found") from exc
         raise HTTPException(status_code=400, detail=_payment_error_detail(exc)) from exc
-    return intent
+    return _intent_out(intent)
 
 
 @router.post("/webhook")
